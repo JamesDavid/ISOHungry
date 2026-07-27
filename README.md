@@ -2,18 +2,22 @@
 
 **ME EAT DVD. ME MAKE ISO. OM NOM NOM.**
 
-Feed it discs, it eats them. Watches every optical drive it can see, devours
-each disc into an ISO, burps, ejects, and waits for the next one. Several
-drives at once. Runs in a container, so the only thing you install is Docker.
+Feed it discs, it eats them. Watches every optical drive it can see, works out
+what each disc *is* — film, album or data — rips it, burps, ejects, and waits
+for the next one. Several drives at once. Runs in a container, so the only
+thing you install is Docker.
 
 ```
 🍪 ISOHungry — me eat DVD! (updated 14:22:07)
 ========================================================
 sr0   | 🍪 NOM NOM NOM! Eating BLADE_RUN | 00:12:41
-sr1   | 😋 Om nom nom... chewing into IS | 00:31:08
+sr1   | 🎵 NOM NOM! Slurping CD          | 00:04:52
 sr2   | 🤤 BUUURP! Me ate THE_MATRIX     | 00:44:52
 sr3   | 🍪 Me hungry... feed me disc!    | --:--:--
 ```
+
+There's a web UI too, on `:8080` — same information, plus a log viewer, and
+you can name a disc while it's still ripping.
 
 ---
 
@@ -41,7 +45,16 @@ docker compose up -d
 passthrough and there's no usbipd equivalent. `./setup.sh` explains your
 options: run the script natively via Homebrew, or point a Linux box at it.
 
-ISOs land in `./out/`.
+Then open **http://localhost:8080**, or watch the terminal display with
+`docker compose logs -f`. Output is sorted by what the disc turned out to be:
+
+```
+out/
+├── movies/   THE_MATRIX.iso, THE_MATRIX_disc2.iso, …
+├── music/    Radiohead/OK Computer/01 - Airbag.mp3, …
+├── data/     BACKUP_2019.iso, …
+└── logs/     sr0.log, sr1.log, …
+```
 
 ---
 
@@ -197,11 +210,12 @@ ssh -L 8080:127.0.0.1:8080 you@host    # then use http://localhost:8080
 
 ## Configuration
 
-Set these in `docker-compose.yml` under `environment:`.
+Set these in `docker-compose.yml` under `environment:`, except `WEB_BIND`,
+which belongs in a `.env` file beside it because it's machine-specific.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BASE_OUTPUT_DIR` | `/output` | Where ISOs are written |
+| `BASE_OUTPUT_DIR` | `/output` | Where output is written |
 | `POLL_INTERVAL` | `5` | Seconds between drive scans |
 | `MAX_PARALLEL` | `2` | Concurrent rips — USB drives on one controller thrash above this |
 | `SPACE_FACTOR` | `22` | Free space required, in tenths of disc size (2.2×) |
@@ -210,11 +224,15 @@ Set these in `docker-compose.yml` under `environment:`.
 | `AUDIO_FORMAT` | `mp3` | `mp3` (LAME `-V0`, ~245 kbps VBR) or `flac` |
 | `RIP_DATA_DISCS` | `1` | `0` to ignore non-video, non-audio discs |
 | `WEB_UI` / `WEB_PORT` | `1` / `8080` | Web status page |
+| `WEB_BIND` *(.env)* | `127.0.0.1` | Interface the UI listens on |
 | `DEVICE_GLOB` | `/dev/sr*` | Which devices to watch |
 | `TZ` | — | Timezone for the clock |
 
-It needs roughly **2× disc size** free while working (the extract plus the
-ISO), and waits rather than failing if there isn't room.
+**Disk space.** Video DVDs are the hungry case: `dvdbackup` extracts the disc
+and then `genisoimage` builds the ISO from the extract, so roughly **2× disc
+size** is needed while working — the default `SPACE_FACTOR=22` reserves 2.2×.
+Data discs need about 1×, and audio CDs need far less once encoded. If there
+isn't room, the drive waits rather than failing partway through.
 
 ---
 
@@ -263,6 +281,17 @@ MusicBrainz lookup that failed alongside a read error; the log has both.
 disc, so `abcde` fell back to placeholder names. Rename it from the web UI, or
 name it while it rips.
 
+**Rename says "file is in use"** — something has the file open. On Windows the
+usual culprit is the ISO being *mounted* as a virtual drive: double-clicking an
+ISO in Explorer mounts it, and Windows then holds an exclusive lock, so neither
+the container nor Windows itself can rename it. Eject the virtual drive and try
+again. To check:
+
+```powershell
+Get-DiskImage -ImagePath C:\path\to\out\movies\YOUR.iso | Select-Object Attached
+Dismount-DiskImage -ImagePath C:\path\to\out\movies\YOUR.iso
+```
+
 **`😵 Drive no talk to me!`** — the drive stopped responding. On Windows this
 usually means the usbip attachment dropped; re-run `attach-drives.ps1`.
 
@@ -292,6 +321,7 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 | `entrypoint.sh` | Starts the web UI, then runs the terminal display |
 | `Dockerfile` | Two stages: libdvdcss + gum, then a Debian runtime |
 | `docker-compose.yml` | Privileged service, `/dev` and `./out` mounts |
+| `.env` *(optional, untracked)* | Machine-specific settings — currently just `WEB_BIND` |
 | `setup.sh` | Linux/macOS setup |
 | `scripts/setup-windows.ps1` | Windows one-time setup |
 | `scripts/attach-drives.ps1` | Per-boot USB attach/detach |
@@ -299,4 +329,7 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 
 Commercial DVDs are CSS-scrambled; libdvdcss is built from VideoLAN source in
 a throwaway stage, so `libdvdread` finds it at rip time with nothing extra to
-install. Rip only discs you're entitled to copy — rules vary by jurisdiction.
+install. Audio CDs go through `abcde`, which wraps cdparanoia, MusicBrainz and
+LAME/FLAC.
+
+Rip only discs you're entitled to copy — rules vary by jurisdiction.
