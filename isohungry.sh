@@ -308,6 +308,63 @@ audio_progress_watch() {
   done
 }
 
+# abcde's own tagging step reports success but leaves the finished files
+# untagged: run_command sends the tagger's output to /dev/null and only checks
+# the exit status, and the tagger exits 0 having done nothing. Rather than rely
+# on it, tag the files ourselves from the CDDB data abcde already fetched --
+# which has properly spaced titles, unlike the munged filenames.
+tag_album() {
+  local scratch=$1 album_dir=$2 logfile=$3
+  local cddb dtitle artist album year genre total f base num title tartist va
+
+  cddb=$(find "$scratch/wrk" -name 'cddbread.*' -print -quit 2>/dev/null)
+  if [ -z "$cddb" ] || [ ! -s "$cddb" ]; then
+    echo "=== no CDDB data to tag from; files left untagged" >> "$logfile"
+    return 0
+  fi
+
+  dtitle=$(sed -n 's/^DTITLE=//p' "$cddb" | head -1)
+  artist=${dtitle%% / *}
+  album=${dtitle#* / }
+  year=$(sed -n 's/^DYEAR=//p' "$cddb" | head -1)
+  genre=$(sed -n 's/^DGENRE=//p' "$cddb" | head -1)
+  [ -n "$dtitle" ] || return 0
+
+  va=n
+  [ -f "$scratch/wrk"/abcde.*/status ] && \
+    grep -qx 'variousartists=y' "$scratch/wrk"/abcde.*/status 2>/dev/null && va=y
+
+  total=$(find "$album_dir" -maxdepth 1 -type f -name "*.$AUDIO_FORMAT" | wc -l)
+  echo "=== tagging $total file(s): $artist / $album" >> "$logfile"
+
+  for f in "$album_dir"/*."$AUDIO_FORMAT"; do
+    [ -f "$f" ] || continue
+    base=${f##*/}
+    num=${base%% *}                       # files are named "NN - Title.ext"
+    num=${num#0}
+    [[ "$num" =~ ^[0-9]+$ ]] || continue
+
+    title=$(sed -n "s/^TTITLE$(( num - 1 ))=//p" "$cddb" | head -1)
+    [ -n "$title" ] || continue
+
+    tartist=$artist
+    if [ "$va" = y ] && [[ "$title" == *" / "* ]]; then
+      tartist=${title%% / *}              # various-artists discs put the
+      title=${title#* / }                 # performer in the track title
+    fi
+
+    if eyeD3 --encoding utf8 \
+         -a "$tartist" -A "$album" -t "$title" \
+         -n "$num" -N "$total" \
+         ${year:+-Y "$year"} ${genre:+-G "$genre"} \
+         "$f" >> "$logfile" 2>&1; then
+      :
+    else
+      echo "!!! tagging failed for $base" >> "$logfile"
+    fi
+  done
+}
+
 # --- audio CDs --------------------------------------------------------------
 # abcde handles the whole chain: MusicBrainz lookup, cdparanoia read, encode,
 # tag and file layout. We rip into scratch and move the finished album into
@@ -336,9 +393,11 @@ CDDBMETHOD=musicbrainz,cddb
 CDDBCOPYLOCAL=n
 CDDBTOUT=15
 CDROMREADERSYNTAX=cdparanoia
-# Without this abcde writes its temp WAVs to /, filling the container layer
-# instead of the output volume.
-WRKDIR="$scratch/wrk"
+# abcde has no WRKDIR: its scratch location is WAVOUTPUTDIR, and
+# ABCDETEMPDIR="\$WAVOUTPUTDIR/abcde.\$CDDBDISCID". Left unset it lands at /,
+# so the WAVs pile up in the container layer instead of the output volume -
+# and the free-space check, which measures the output volume, wouldn't see it.
+WAVOUTPUTDIR="$scratch/wrk"
 OUTPUTDIR="$scratch/out"
 OUTPUTTYPE="$AUDIO_FORMAT"
 LAMEOPTS="-V 0 --vbr-new -q 0"
@@ -347,7 +406,7 @@ MAXPROCS=2
 PADTRACKS=y
 EJECTCD=n
 INTERACTIVE=n
-ACTIONS=cddb,read,encode,tag,move,clean
+ACTIONS=cddb,read,encode,tag,move
 OUTPUTFORMAT='\${ARTISTFILE}/\${ALBUMFILE}/\${TRACKNUM} - \${TRACKFILE}'
 VAOUTPUTFORMAT='Various Artists/\${ALBUMFILE}/\${TRACKNUM} - \${ARTISTFILE} - \${TRACKFILE}'
 EOF
@@ -363,7 +422,7 @@ EOF
   # shellcheck disable=SC2064
   trap "kill $watch_pid 2>/dev/null" RETURN
 
-  if ! HOME="$scratch" abcde -N -d "$device" -c "$conf" >> "$logfile" 2>&1; then
+  if ! ( cd "$scratch/wrk" && HOME="$scratch" abcde -N -d "$device" -c "$conf" ) >> "$logfile" 2>&1; then
     # A metadata lookup that times out shouldn't cost you the disc. Retry
     # without the lookup: untagged audio you can name later beats nothing.
     echo "=== lookup or rip failed; retrying without metadata lookup" >> "$logfile"
@@ -371,7 +430,7 @@ EOF
     rm -rf "$scratch"/.abcde.* "$scratch/wrk" 2>/dev/null
     mkdir -p "$scratch/wrk"
     sed 's/^ACTIONS=.*/ACTIONS=read,encode,tag,move,clean/' "$conf" > "$conf.nolookup"
-    if ! HOME="$scratch" abcde -N -d "$device" -c "$conf.nolookup" >> "$logfile" 2>&1; then
+    if ! ( cd "$scratch/wrk" && HOME="$scratch" abcde -N -d "$device" -c "$conf.nolookup" ) >> "$logfile" 2>&1; then
       set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
       echo "!!! abcde failed, with and without metadata" >> "$logfile"
       rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
@@ -395,6 +454,8 @@ EOF
     try_eject "$device" "$dev_name" "$start" "$label"
     return 1
   fi
+
+  tag_album "$scratch" "$album_src" "$logfile"
 
   album_rel=${album_src#"$scratch/out/"}
   if friendly=$(pending_name "$fp"); then
