@@ -258,6 +258,38 @@ pending_name() {
   printf '%s' "$friendly"
 }
 
+# abcde announces the disc it matched ("Selected: #1 (Artist / Album)") and
+# then narrates each track. Both land in our log, so tail it and lift the album
+# name into the status line — a rip in progress should say what it's eating,
+# not a placeholder. Audio CDs have no volume label to fall back on.
+audio_progress_watch() {
+  local logfile=$1 dev_name=$2 start=$3 fallback=$4 offset=$5
+  local album="" slice line subject
+
+  while :; do
+    sleep 3
+    [ -f "$logfile" ] || continue
+    slice=$(tail -c "+$((offset + 1))" "$logfile" 2>/dev/null) || continue
+
+    if [ -z "$album" ]; then
+      album=$(grep -oE '^Selected: #[0-9]+ \(.+\)$' <<< "$slice" | tail -1 \
+              | sed -E 's/^Selected: #[0-9]+ \((.+)\)$/\1/')
+      [ -n "$album" ] && echo "=== matched: $album" >> "$logfile"
+    fi
+
+    subject=${album:-$fallback}
+    line=$(grep -oE '(Encoding|Tagging|Grabbing) track [0-9]+( of [0-9]+)?' <<< "$slice" | tail -1)
+
+    if [[ "$line" =~ track\ ([0-9]+)\ of\ ([0-9]+) ]]; then
+      set_status "$dev_name" "🎵 Track ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}: $subject" "$start"
+    elif [[ "$line" =~ track\ ([0-9]+) ]]; then
+      set_status "$dev_name" "🎵 Track ${BASH_REMATCH[1]}: $subject" "$start"
+    elif [ -n "$album" ]; then
+      set_status "$dev_name" "🎵 NOM NOM! $subject" "$start"
+    fi
+  done
+}
+
 # --- audio CDs --------------------------------------------------------------
 # abcde handles the whole chain: MusicBrainz lookup, cdparanoia read, encode,
 # tag and file layout. We rip into scratch and move the finished album into
@@ -302,6 +334,16 @@ VAOUTPUTFORMAT='Various Artists/\${ALBUMFILE}/\${TRACKNUM} - \${ARTISTFILE} - \$
 EOF
 
   set_status "$dev_name" "🎵 NOM NOM! Slurping $label" "$start"
+
+  # Watch our own log from here on, so the status can name the album as soon
+  # as abcde resolves it rather than at the very end.
+  local log_offset watch_pid
+  log_offset=$(stat -c%s "$logfile" 2>/dev/null || echo 0)
+  audio_progress_watch "$logfile" "$dev_name" "$start" "$label" "$log_offset" &
+  watch_pid=$!
+  # shellcheck disable=SC2064
+  trap "kill $watch_pid 2>/dev/null" RETURN
+
   if ! HOME="$scratch" abcde -N -d "$device" -c "$conf" >> "$logfile" 2>&1; then
     # A metadata lookup that times out shouldn't cost you the disc. Retry
     # without the lookup: untagged audio you can name later beats nothing.
@@ -319,6 +361,11 @@ EOF
     fi
     echo "=== ripped without metadata; rename it from the web UI" >> "$logfile"
   fi
+
+  # Stop the watcher before writing any final status, or it would overwrite it
+  # on its next tick. The RETURN trap above only covers the early failure exits.
+  kill "$watch_pid" 2>/dev/null
+  wait "$watch_pid" 2>/dev/null
 
   # abcde writes <artist>/<album>/; find the deepest directory holding tracks.
   album_src=$(find "$scratch/out" -type f \( -name "*.$AUDIO_FORMAT" \) -printf '%h\n' 2>/dev/null | sort -u | head -1)
