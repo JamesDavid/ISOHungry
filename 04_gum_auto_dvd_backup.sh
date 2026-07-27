@@ -30,22 +30,33 @@ DEVICE_GLOB="${DEVICE_GLOB:-/dev/sr*}"   # overridable so the state machine can 
 # indefinitely. Without a cap, one bad drive stalls the scan for every drive.
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-30}"
 
-# Persistent, on the output volume
+AUDIO_FORMAT="${AUDIO_FORMAT:-mp3}"      # mp3 (LAME -V0 VBR, ~245kbps) or flac
+RIP_DATA_DISCS="${RIP_DATA_DISCS:-1}"    # 0 to ignore non-video, non-audio discs
+
+# Persistent, on the output volume. Each disc kind lands in its own subdirectory.
 LOG_DIR="$BASE_OUTPUT_DIR/logs"
-FP_DIR="$BASE_OUTPUT_DIR/.ripped"     # fingerprint -> iso name, "have I seen this disc"
-WORK_DIR="$BASE_OUTPUT_DIR/.work"     # dvdbackup scratch space
+FP_DIR="$BASE_OUTPUT_DIR/.ripped"     # fingerprint -> output name, "have I seen this disc"
+WORK_DIR="$BASE_OUTPUT_DIR/.work"     # scratch space for extraction and encoding
+MOVIE_DIR="$BASE_OUTPUT_DIR/movies"
+MUSIC_DIR="$BASE_OUTPUT_DIR/music"
+DATA_DIR="$BASE_OUTPUT_DIR/data"
+
+PENDING_DIR="$BASE_OUTPUT_DIR/.pending"  # fingerprint -> friendly name chosen from the web UI
 
 # Ephemeral, per run
 LOCK_DIR="/tmp/dvd_rip_processed"     # one file per ACTIVE rip (also the concurrency counter)
 STATUS_DIR="/tmp/dvd_rip_status"      # one file per drive, drives the TUI
 HANDLED_DIR="/tmp/dvd_rip_handled"    # per drive: fingerprint of the disc already dealt with
+META_DIR="/tmp/dvd_rip_meta"          # per drive: structured detail for the web UI
+                                      # (kept out of STATUS_DIR, whose glob feeds the TUI)
 
-mkdir -p "$BASE_OUTPUT_DIR" "$LOG_DIR" "$FP_DIR" "$WORK_DIR" \
-         "$LOCK_DIR" "$STATUS_DIR" "$HANDLED_DIR"
+mkdir -p "$BASE_OUTPUT_DIR" "$LOG_DIR" "$FP_DIR" "$WORK_DIR" "$PENDING_DIR" \
+         "$MOVIE_DIR" "$MUSIC_DIR" "$DATA_DIR" \
+         "$LOCK_DIR" "$STATUS_DIR" "$HANDLED_DIR" "$META_DIR"
 
 # A previous run may have died mid-write. Partial ISOs are never valid, and
 # leaving one behind would make it look like the disc was already ripped.
-rm -f "$BASE_OUTPUT_DIR"/*.iso.partial
+find "$BASE_OUTPUT_DIR" -maxdepth 2 -name '*.iso.partial' -delete 2>/dev/null
 rm -rf "${WORK_DIR:?}"/*
 rm -f "${LOCK_DIR:?}"/* "${HANDLED_DIR:?}"/*
 
@@ -136,6 +147,35 @@ disc_bytes() {
 
 free_bytes() { df -B1 --output=avail "$BASE_OUTPUT_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
 
+# --- disc identification ----------------------------------------------------
+# What kind of disc is this? Audio is checked first: an "enhanced CD" carries
+# both a data session and audio tracks, and the music is the interesting part.
+
+disc_mode() {
+  timeout "$PROBE_TIMEOUT" cd-info --no-device-info --no-cddb -q "$1" 2>/dev/null \
+    | sed -n 's/^Disc mode: *//p' | head -1
+}
+
+# cdparanoia's TOC query is a fallback for drives cd-info can't read.
+has_audio_tracks() {
+  timeout "$PROBE_TIMEOUT" cdparanoia -Q -d "$1" 2>&1 | grep -qE '^ *[0-9]+\.'
+}
+
+# TOC-derived identity for audio CDs, which have no ISO9660 metadata to hash.
+audio_toc() { timeout "$PROBE_TIMEOUT" cd-discid "$1" 2>/dev/null; }
+
+# cd-discid's last field is the disc length in seconds; CDDA is 176400 B/s.
+audio_bytes() {
+  local toc=$1 secs
+  secs=${toc##* }
+  [[ "$secs" =~ ^[0-9]+$ ]] || { printf '0'; return; }
+  printf '%d' $(( secs * 176400 ))
+}
+
+has_video_ts() {
+  timeout "$PROBE_TIMEOUT" isoinfo -f -i "$1" 2>/dev/null | grep -qi '/VIDEO_TS'
+}
+
 try_eject() {
   local device=$1 dev_name=$2 start=$3 context=${4:-}
   if timeout "$PROBE_TIMEOUT" eject "$device" 2>>"$LOG_DIR/$dev_name.log"; then
@@ -200,12 +240,169 @@ render_status() {
 
 # --------------------------------------------------------------------- rip
 
+# Structured detail for the web UI. The TUI reads STATUS_DIR only, so this is
+# purely additive — nothing here changes what the terminal shows.
+write_meta() {
+  local dev_name=$1
+  shift
+  printf '%s\n' "$@" > "$META_DIR/$dev_name"
+}
+
+# Resolve the friendly name set from the web UI, if any. Echoes it or nothing.
+pending_name() {
+  local fp=$1 friendly
+  [ -s "$PENDING_DIR/$fp" ] || return 1
+  friendly=$(sanitize_label "$(< "$PENDING_DIR/$fp")")
+  rm -f "$PENDING_DIR/$fp"
+  [ -n "$friendly" ] && [ "$friendly" != "unknown" ] || return 1
+  printf '%s' "$friendly"
+}
+
+# --- audio CDs --------------------------------------------------------------
+# abcde handles the whole chain: MusicBrainz lookup, cdparanoia read, encode,
+# tag and file layout. We rip into scratch and move the finished album into
+# place, so a killed run never leaves a half-encoded album in the library.
+rip_audio() {
+  local device=$1 dev_name=$2 label=$4 fp=$5 start=$6 total_bytes=${7:-0}
+  local logfile="$LOG_DIR/$dev_name.log"
+  local scratch="$WORK_DIR/$dev_name"
+  local conf="$scratch/abcde.conf"
+  local album_src album_rel target friendly stamp
+
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=audio" \
+    "total_bytes=$total_bytes" "scratch=$scratch" "phase=ripping"
+
+  echo "=== $(date -Is) $dev_name  AUDIO CD  fp=$fp  format=$AUDIO_FORMAT" >> "$logfile"
+
+  rm -rf "$scratch"; mkdir -p "$scratch"
+
+  cat > "$conf" <<EOF
+CDDBMETHOD=musicbrainz
+CDDBCOPYLOCAL=n
+CDROMREADERSYNTAX=cdparanoia
+OUTPUTDIR="$scratch/out"
+OUTPUTTYPE="$AUDIO_FORMAT"
+LAMEOPTS="-V 0 --vbr-new -q 0"
+FLACOPTS="-s -e -V -8"
+MAXPROCS=2
+PADTRACKS=y
+EJECTCD=n
+INTERACTIVE=n
+ACTIONS=cddb,read,encode,tag,move,clean
+OUTPUTFORMAT='\${ARTISTFILE}/\${ALBUMFILE}/\${TRACKNUM} - \${TRACKFILE}'
+VAOUTPUTFORMAT='Various Artists/\${ALBUMFILE}/\${TRACKNUM} - \${ARTISTFILE} - \${TRACKFILE}'
+EOF
+
+  set_status "$dev_name" "🎵 NOM NOM! Slurping $label" "$start"
+  if ! HOME="$scratch" abcde -N -d "$device" -c "$conf" >> "$logfile" 2>&1; then
+    set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
+    echo "!!! abcde failed" >> "$logfile"
+    rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
+    try_eject "$device" "$dev_name" "$start" "$label"
+    return 1
+  fi
+
+  # abcde writes <artist>/<album>/; find the deepest directory holding tracks.
+  album_src=$(find "$scratch/out" -type f \( -name "*.$AUDIO_FORMAT" \) -printf '%h\n' 2>/dev/null | sort -u | head -1)
+  if [ -z "$album_src" ]; then
+    set_status "$dev_name" "😝 No music came out! see logs/$dev_name.log" "$start"
+    echo "!!! no encoded tracks produced" >> "$logfile"
+    rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
+    try_eject "$device" "$dev_name" "$start" "$label"
+    return 1
+  fi
+
+  album_rel=${album_src#"$scratch/out/"}
+  if friendly=$(pending_name "$fp"); then
+    album_rel="$friendly"
+    echo "=== friendly name applied: $friendly" >> "$logfile"
+  fi
+
+  target="$MUSIC_DIR/$album_rel"
+  if [ -e "$target" ]; then
+    printf -v stamp '%(%Y-%m-%d_%H%M%S)T' -1
+    target="${target}_${stamp}"
+  fi
+  mkdir -p "$(dirname "$target")"
+  mv -f "$album_src" "$target"
+  sync
+
+  printf '%s\n' "music/${target#"$MUSIC_DIR/"}" > "$FP_DIR/$fp"
+  echo "=== done $(date -Is) -> $target" >> "$logfile"
+
+  rm -rf "$scratch"
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=audio" \
+    "total_bytes=$total_bytes" "iso_path=$target" "phase=done"
+  set_status "$dev_name" "🤤 BUUURP! Me ate ${target##*/}" "$start"
+  try_eject "$device" "$dev_name" "$start" "$label" && \
+    set_status "$dev_name" "💨 BURP! Spit out ${target##*/}" "$start"
+  rm -f "$LOCK_DIR/$dev_name"
+}
+
+# --- data discs -------------------------------------------------------------
+# A plain sector-for-sector image. The volume size from the ISO9660 descriptor
+# bounds the read, so we don't run off the end of the disc.
+rip_data() {
+  local device=$1 dev_name=$2 iso_path=$3 label=$4 fp=$5 start=$6 total_bytes=${7:-0}
+  local logfile="$LOG_DIR/$dev_name.log"
+  local partial="$iso_path.partial"
+  local blocks friendly stamp
+
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=data" \
+    "total_bytes=$total_bytes" "iso_path=$iso_path" "partial=$partial" "phase=ripping"
+
+  echo "=== $(date -Is) $dev_name  DATA DISC  label=$label  fp=$fp -> $iso_path" >> "$logfile"
+
+  set_status "$dev_name" "🍪 NOM NOM! Eating data $label" "$start"
+  blocks=$(( total_bytes / 2048 ))
+  if (( blocks > 0 )); then
+    dd if="$device" of="$partial" bs=2048 count="$blocks" >> "$logfile" 2>&1
+  else
+    dd if="$device" of="$partial" bs=2048 >> "$logfile" 2>&1
+  fi
+  if (( $? != 0 )); then
+    set_status "$dev_name" "🤮 Me no like dis disc! see logs/$dev_name.log" "$start"
+    echo "!!! dd failed" >> "$logfile"
+    rm -f "$partial"; rm -f "$LOCK_DIR/$dev_name"
+    try_eject "$device" "$dev_name" "$start" "$label"
+    return 1
+  fi
+
+  sync
+  if friendly=$(pending_name "$fp"); then
+    printf -v stamp '%(%Y-%m-%d_%H%M%S)T' -1
+    iso_path="$DATA_DIR/${friendly}.iso"
+    [ -e "$iso_path" ] && iso_path="$DATA_DIR/${friendly}_${stamp}.iso"
+    echo "=== friendly name applied: $friendly" >> "$logfile"
+  fi
+
+  mv -f "$partial" "$iso_path"
+  printf '%s\n' "data/${iso_path##*/}" > "$FP_DIR/$fp"
+  echo "=== done $(date -Is) -> $iso_path" >> "$logfile"
+
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=data" \
+    "total_bytes=$total_bytes" "iso_path=$iso_path" "phase=done"
+  set_status "$dev_name" "🤤 BUUURP! Me ate $label" "$start"
+  try_eject "$device" "$dev_name" "$start" "$label" && \
+    set_status "$dev_name" "💨 BURP! Spit out $label" "$start"
+  rm -f "$LOCK_DIR/$dev_name"
+}
+
+# --- video DVDs -------------------------------------------------------------
 rip_disc() {
-  local device=$1 dev_name=$2 iso_path=$3 label=$4 fp=$5 start=$6
+  local device=$1 dev_name=$2 iso_path=$3 label=$4 fp=$5 start=$6 total_bytes=${7:-0}
   local logfile="$LOG_DIR/$dev_name.log"
   local scratch="$WORK_DIR/$dev_name"
   local partial="$iso_path.partial"
-  local extract_dir
+  local extract_dir friendly stamp
+
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "total_bytes=$total_bytes" "iso_path=$iso_path" "scratch=$scratch" "phase=ripping"
 
   {
     echo "=== $(date -Is) $dev_name  label=$label  fp=$fp -> $iso_path"
@@ -234,6 +431,9 @@ rip_disc() {
 
   # Build to .partial and rename only on success, so an interrupted run can
   # never leave a truncated ISO that later looks like a completed rip.
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "total_bytes=$total_bytes" "iso_path=$iso_path" "scratch=$scratch" "phase=iso"
   set_status "$dev_name" "😋 Om nom nom... chewing into ISO" "$start"
   if ! genisoimage -dvd-video -o "$partial" "$(dirname "$extract_dir")" >> "$logfile" 2>&1; then
     set_status "$dev_name" "🤮 Me choke on dis! see logs/$dev_name.log" "$start"
@@ -244,11 +444,24 @@ rip_disc() {
   fi
 
   sync
+
+  # A friendly name may have been set from the web UI while this was ripping.
+  # It is applied here, at finalize, so it wins over the label-derived name.
+  if friendly=$(pending_name "$fp"); then
+    printf -v stamp '%(%Y-%m-%d_%H%M%S)T' -1
+    iso_path="$MOVIE_DIR/${friendly}.iso"
+    [ -e "$iso_path" ] && iso_path="$MOVIE_DIR/${friendly}_${stamp}.iso"
+    echo "=== friendly name applied: $friendly" >> "$logfile"
+  fi
+
   mv -f "$partial" "$iso_path"
-  printf '%s\n' "${iso_path##*/}" > "$FP_DIR/$fp"
+  printf '%s\n' "movies/${iso_path##*/}" > "$FP_DIR/$fp"
   echo "=== done $(date -Is) -> $iso_path" >> "$logfile"
 
   rm -rf "$scratch"
+  write_meta "$dev_name" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "total_bytes=$total_bytes" "iso_path=$iso_path" "phase=done"
   set_status "$dev_name" "🤤 BUUURP! Me ate $label" "$start"
   try_eject "$device" "$dev_name" "$start" "$label" && \
     set_status "$dev_name" "💨 BURP! Spit out $label" "$start"
@@ -266,7 +479,7 @@ cleanup() {
   for pid in "${RIP_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
   wait 2>/dev/null
   # An in-flight rip was just killed; its ISO is incomplete by definition.
-  rm -f "$BASE_OUTPUT_DIR"/*.iso.partial
+  find "$BASE_OUTPUT_DIR" -maxdepth 2 -name '*.iso.partial' -delete 2>/dev/null
   rm -rf "${WORK_DIR:?}"/*
   rm -f "${LOCK_DIR:?}"/*
   printf '\033[?25h\n🍪 ISOHungry going sleep now. Me still hungry...\n'
@@ -300,19 +513,49 @@ while true; do
     [ -e "$LOCKFILE" ] && continue
 
     # No readable disc: reset the drive's state so the next insert is noticed.
-    ISO_INFO=$(timeout "$PROBE_TIMEOUT" isoinfo -d -i "$DEVICE" 2>/dev/null)
-    PROBE_RC=$?
-    if (( PROBE_RC == 124 )); then
-      set_status "$DEV_NAME" "😵 Drive no talk to me!" ""
-      continue
+    # Audio first: an enhanced CD has both a data session and audio tracks,
+    # and the music is what you actually want off it.
+    KIND=""; ISO_INFO=""; TOC=""
+    MODE=$(disc_mode "$DEVICE")
+    case "$MODE" in
+      *CD-DA*|*Mixed*) KIND=audio ;;
+    esac
+
+    if [ -z "$KIND" ]; then
+      ISO_INFO=$(timeout "$PROBE_TIMEOUT" isoinfo -d -i "$DEVICE" 2>/dev/null)
+      PROBE_RC=$?
+      if (( PROBE_RC == 124 )); then
+        set_status "$DEV_NAME" "😵 Drive no talk to me!" ""
+        continue
+      fi
+      if (( PROBE_RC == 0 )) && [ -n "$ISO_INFO" ]; then
+        if has_video_ts "$DEVICE"; then KIND=video; else KIND=data; fi
+      elif has_audio_tracks "$DEVICE"; then
+        KIND=audio          # cd-info couldn't tell us, but there is audio here
+      fi
     fi
-    if (( PROBE_RC != 0 )) || [ -z "$ISO_INFO" ]; then
-      rm -f "$HANDLED_DIR/$DEV_NAME"
+
+    if [ -z "$KIND" ]; then
+      rm -f "$HANDLED_DIR/$DEV_NAME" "$META_DIR/$DEV_NAME"
       set_status "$DEV_NAME" "🍪 Me hungry... feed me disc!" ""
       continue
     fi
 
-    FP=$(disc_fingerprint "$ISO_INFO")
+    if [ "$KIND" = data ] && [ "$RIP_DATA_DISCS" != "1" ]; then
+      set_status "$DEV_NAME" "🙅 Me no eat data discs" ""
+      continue
+    fi
+
+    if [ "$KIND" = audio ]; then
+      TOC=$(audio_toc "$DEVICE")
+      if [ -z "$TOC" ]; then
+        set_status "$DEV_NAME" "😵 Drive no talk to me!" ""
+        continue
+      fi
+      FP=$(disc_fingerprint "$TOC")
+    else
+      FP=$(disc_fingerprint "$ISO_INFO")
+    fi
 
     # Already dealt with this exact disc on this drive (incl. a failed eject).
     if [ -f "$HANDLED_DIR/$DEV_NAME" ] && [ "$(< "$HANDLED_DIR/$DEV_NAME")" = "$FP" ]; then
@@ -334,8 +577,12 @@ while true; do
       continue
     fi
 
-    # dvdbackup extracts, then genisoimage builds the ISO: ~2x disc size needed.
-    DISC_BYTES=$(disc_bytes "$ISO_INFO")
+    # Extract then build: video needs ~2x disc size, audio far less once encoded.
+    if [ "$KIND" = audio ]; then
+      DISC_BYTES=$(audio_bytes "$TOC")
+    else
+      DISC_BYTES=$(disc_bytes "$ISO_INFO")
+    fi
     NEED=$(( DISC_BYTES * SPACE_FACTOR / 10 ))
     AVAIL=$(free_bytes)
     if [[ -n "$AVAIL" ]] && (( DISC_BYTES > 0 )) && (( AVAIL < NEED )); then
@@ -348,6 +595,21 @@ while true; do
     [ "$LABEL" = "unknown" ] && LABEL="unknown_$DEV_NAME"
     printf -v STAMP '%(%Y-%m-%d_%H%M%S)T' -1
 
+    # Audio CDs get their names from MusicBrainz inside abcde, so the ISO-style
+    # naming below doesn't apply to them.
+    if [ "$KIND" = audio ]; then
+      printf '%s' "$FP" > "$HANDLED_DIR/$DEV_NAME"
+      touch "$LOCKFILE"
+      printf -v START_TIME '%(%s)T' -1
+      set_status "$DEV_NAME" "🎵 NOM NOM! Slurping CD" "$START_TIME"
+      rip_audio "$DEVICE" "$DEV_NAME" "" "$LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
+      RIP_PIDS+=("$!")
+      continue
+    fi
+
+    TARGET_DIR="$MOVIE_DIR"
+    [ "$KIND" = data ] && TARGET_DIR="$DATA_DIR"
+
     # A generic or missing label tells us nothing about which film this is, and
     # is shared by countless discs, so stamp it with the rip time. A distinctive
     # label is used as-is, and only stamped if it would collide.
@@ -356,16 +618,33 @@ while true; do
     else
       ISO_BASE="$LABEL"
     fi
-    ISO_PATH="$BASE_OUTPUT_DIR/${ISO_BASE}.iso"
-    [ -e "$ISO_PATH" ] && ISO_PATH="$BASE_OUTPUT_DIR/${ISO_BASE}_${STAMP}.iso"
-    [ -e "$ISO_PATH" ] && ISO_PATH="$BASE_OUTPUT_DIR/${ISO_BASE}_${STAMP}_${FP}.iso"
+    ISO_PATH="$TARGET_DIR/${ISO_BASE}.iso"
+
+    # A repeated *distinctive* label is almost always a multi-disc set: box
+    # sets routinely stamp every disc with the same volume label. Number those
+    # rather than timestamping them, so a set reads as one thing on disk.
+    # (Generic labels already carry a timestamp in ISO_BASE and never land
+    # here — those really are unrelated films that merely share a label.)
+    if [ -e "$ISO_PATH" ]; then
+      DISC_N=2
+      while [ -e "$TARGET_DIR/${ISO_BASE}_disc${DISC_N}.iso" ] && (( DISC_N < 99 )); do
+        (( DISC_N++ ))
+      done
+      ISO_PATH="$TARGET_DIR/${ISO_BASE}_disc${DISC_N}.iso"
+    fi
+    [ -e "$ISO_PATH" ] && ISO_PATH="$TARGET_DIR/${ISO_BASE}_${STAMP}.iso"
+    [ -e "$ISO_PATH" ] && ISO_PATH="$TARGET_DIR/${ISO_BASE}_${STAMP}_${FP}.iso"
 
     printf '%s' "$FP" > "$HANDLED_DIR/$DEV_NAME"
     touch "$LOCKFILE"
     printf -v START_TIME '%(%s)T' -1
     set_status "$DEV_NAME" "🍪 NOM NOM NOM! Eating $LABEL" "$START_TIME"
 
-    rip_disc "$DEVICE" "$DEV_NAME" "$ISO_PATH" "$LABEL" "$FP" "$START_TIME" &
+    if [ "$KIND" = data ]; then
+      rip_data "$DEVICE" "$DEV_NAME" "$ISO_PATH" "$LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
+    else
+      rip_disc "$DEVICE" "$DEV_NAME" "$ISO_PATH" "$LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
+    fi
     RIP_PIDS+=("$!")
   done
 

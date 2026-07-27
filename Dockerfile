@@ -50,7 +50,17 @@ RUN set -eux; \
         procps \
         ncurses-bin \
         tzdata \
-        usbip; \
+        usbip \
+        python3 \
+        abcde \
+        cdparanoia \
+        cd-discid \
+        libcdio-utils \
+        lame \
+        flac \
+        id3v2 \
+        vorbis-tools \
+        curl; \
     rm -rf /var/lib/apt/lists/*
 
 # libdvdread dlopen()s libdvdcss.so.2 at runtime; ldconfig makes it findable.
@@ -59,7 +69,9 @@ COPY --from=dvdcss /staging/usr/bin/gum /usr/bin/gum
 RUN echo /usr/lib/dvdcss > /etc/ld.so.conf.d/dvdcss.conf && ldconfig
 
 COPY 04_gum_auto_dvd_backup.sh /usr/local/bin/auto-dvd-backup
-RUN chmod +x /usr/local/bin/auto-dvd-backup
+COPY entrypoint.sh /usr/local/bin/entrypoint
+COPY web/ /opt/isohungry/
+RUN chmod +x /usr/local/bin/auto-dvd-backup /usr/local/bin/entrypoint
 
 # C.UTF-8 makes bash count characters rather than bytes, so the status line
 # no longer slices emoji in half mid-scroll.
@@ -71,6 +83,10 @@ ENV BASE_OUTPUT_DIR=/output \
     LC_ALL=C.UTF-8 \
     DVDCSS_METHOD=key
 
-VOLUME ["/output"]
+ENV WEB_UI=1 \
+    WEB_PORT=8080
 
-ENTRYPOINT ["/usr/local/bin/auto-dvd-backup"]
+VOLUME ["/output"]
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/entrypoint"]

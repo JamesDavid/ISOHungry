@@ -67,7 +67,22 @@ forwarded into WSL2; there is no SATA passthrough. Linux has no such limit.
 
 ---
 
-## How discs get named
+## What it eats
+
+Discs are identified automatically and sorted into subdirectories.
+
+| Disc | Goes to | How |
+|---|---|---|
+| **Video DVD** | `out/movies/` | `dvdbackup` + `genisoimage`, CSS handled by libdvdcss |
+| **Audio CD** | `out/music/` | `abcde`: MusicBrainz lookup, cdparanoia read, tagged MP3 (LAME `-V0`) or FLAC |
+| **Data disc** | `out/data/` | Sector-for-sector image, bounded by the volume size |
+
+Audio is checked first, so an *enhanced CD* (audio tracks plus a data session)
+is ripped as music rather than as a data image. Music lands as
+`music/Artist/Album/01 - Track.mp3`, tagged from MusicBrainz; set
+`AUDIO_FORMAT=flac` for lossless. `RIP_DATA_DISCS=0` ignores data discs.
+
+## How things get named
 
 Nothing ever silently overwrites or gets skipped as a duplicate.
 
@@ -76,17 +91,37 @@ Nothing ever silently overwrites or gets skipped as a duplicate.
 | Distinctive (`THE_MATRIX`) | `THE_MATRIX.iso` |
 | Generic (`DVD_VIDEO`, `WB_DVD`, `UNTITLED`…) | `DVD_VIDEO_2026-07-27_150000.iso` |
 | No label at all | `unknown_sr0_2026-07-27_150000.iso` |
-| Distinctive but already taken | `THE_MATRIX_2026-07-27_161500.iso` |
+| **Distinctive, already seen** | `THE_MATRIX_disc2.iso`, `_disc3`, … |
 
-Generic labels are shared by countless unrelated discs — half of Warner's
-catalogue is stamped `WB_DVD` — so those always get the rip timestamp. The
-list is in `GENERIC_LABELS` and you can override it.
+That last row is the box-set case. Multi-disc sets routinely stamp every disc
+with the *same* volume label, so a repeated distinctive label is treated as
+another disc in the set and numbered, keeping the set together on disk. A
+repeated *generic* label is treated as an unrelated film and timestamped
+instead — half of Warner's catalogue is stamped `WB_DVD`, and those discs have
+nothing to do with each other. `GENERIC_LABELS` controls that list.
 
-**Duplicate detection doesn't use the label.** Each disc is fingerprinted by
-hashing its ISO9660 metadata, so two different films both labelled `DVD_VIDEO`
-are correctly seen as different discs, while the *same* disc reinserted next
-week is recognised and skipped. Markers live in `out/.ripped/<fp>`; delete one
-to make ISOHungry hungry for that disc again.
+**Duplicate detection doesn't use the label.** Each disc is fingerprinted —
+ISO9660 metadata for discs, the TOC for audio CDs — so two different films both
+labelled `DVD_VIDEO` are seen as different discs, while the *same* disc
+reinserted next week is recognised and skipped rather than becoming `_disc2`.
+Markers live in `out/.ripped/<fp>`; delete one to make ISOHungry hungry for
+that disc again.
+
+## Web UI
+
+`http://localhost:8080` — a status page that mirrors the terminal display:
+every drive, what it's eating, progress bars, finished items with download
+links, and a log viewer. The terminal display stays exactly as it was; the web
+UI is additive and reads the same state files.
+
+Two things it can change, and nothing else: **name a rip while it's running**
+(applied when the ISO is finalised, so you can type the real film title while
+the disc spins) and **rename a finished item**, which keeps its fingerprint
+marker in step so the disc stays recognised. There is no eject, no delete.
+
+It binds to `127.0.0.1` by default. It serves multi-gigabyte files and has no
+authentication, so only expose it on a network you trust. `WEB_UI=0` disables
+it entirely.
 
 ---
 
@@ -121,6 +156,9 @@ Set these in `docker-compose.yml` under `environment:`.
 | `SPACE_FACTOR` | `22` | Free space required, in tenths of disc size (2.2×) |
 | `PROBE_TIMEOUT` | `30` | Seconds before a wedged drive is given up on |
 | `GENERIC_LABELS` | see script | Labels too common to trust as filenames |
+| `AUDIO_FORMAT` | `mp3` | `mp3` (LAME `-V0`, ~245 kbps VBR) or `flac` |
+| `RIP_DATA_DISCS` | `1` | `0` to ignore non-video, non-audio discs |
+| `WEB_UI` / `WEB_PORT` | `1` / `8080` | Web status page |
 | `DEVICE_GLOB` | `/dev/sr*` | Which devices to watch |
 | `TZ` | — | Timezone for the clock |
 
@@ -189,7 +227,9 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 | Path | Purpose |
 |---|---|
 | `04_gum_auto_dvd_backup.sh` | The ripper |
-| `Dockerfile` | Two stages: libdvdcss + gum, then a slim Debian runtime |
+| `web/server.py`, `web/index.html` | Web status page (stdlib only) |
+| `entrypoint.sh` | Starts the web UI, then runs the terminal display |
+| `Dockerfile` | Two stages: libdvdcss + gum, then a Debian runtime |
 | `docker-compose.yml` | Privileged service, `/dev` and `./out` mounts |
 | `setup.sh` | Linux/macOS setup |
 | `scripts/setup-windows.ps1` | Windows one-time setup |

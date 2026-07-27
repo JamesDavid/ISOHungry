@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🍪 ISOHungry</title>
+<style>
+  :root {
+    --bg:#1b1410; --card:#261c16; --edge:#3a2b22; --ink:#f5e6d3;
+    --dim:#a89684; --cookie:#d99b45; --good:#7fb069; --bad:#d1495b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#faf4ec; --card:#fff; --edge:#e6d9c9; --ink:#2b1f17;
+            --dim:#7a6a5a; --cookie:#b8762a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; padding:1.5rem 1rem 3rem; background:var(--bg); color:var(--ink);
+    font:15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; }
+  .sub { color:var(--dim); font-size:.85rem; margin-bottom:1.5rem; }
+  h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.1em;
+       color:var(--dim); margin:2rem 0 .75rem; font-weight:600; }
+  .card {
+    background:var(--card); border:1px solid var(--edge); border-radius:10px;
+    padding:.9rem 1rem; margin-bottom:.6rem;
+  }
+  .row { display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }
+  .dev { font-weight:700; color:var(--cookie); min-width:3.2rem; }
+  .status { flex:1; min-width:12rem; }
+  .time { color:var(--dim); font-variant-numeric:tabular-nums; font-size:.85rem; }
+  .bar {
+    height:7px; background:var(--edge); border-radius:4px; overflow:hidden;
+    margin-top:.7rem;
+  }
+  .bar i { display:block; height:100%; background:var(--cookie); width:0;
+           transition:width .6s ease; }
+  .meta { color:var(--dim); font-size:.8rem; margin-top:.45rem; }
+  .name-row { display:flex; gap:.4rem; margin-top:.7rem; }
+  input {
+    flex:1; min-width:0; background:var(--bg); border:1px solid var(--edge);
+    color:var(--ink); border-radius:6px; padding:.4rem .6rem; font:inherit;
+    font-size:.85rem;
+  }
+  input:focus { outline:2px solid var(--cookie); outline-offset:-1px; }
+  button {
+    background:var(--cookie); color:#1b1410; border:0; border-radius:6px;
+    padding:.4rem .8rem; font:inherit; font-size:.85rem; font-weight:700;
+    cursor:pointer; white-space:nowrap;
+  }
+  button:hover { filter:brightness(1.1); }
+  button.ghost { background:transparent; color:var(--dim);
+                 border:1px solid var(--edge); font-weight:400; }
+  a.dl { color:var(--cookie); text-decoration:none; font-weight:700; }
+  a.dl:hover { text-decoration:underline; }
+  .iso { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; }
+  .iso .nm { flex:1; min-width:11rem; word-break:break-all; }
+  .empty { color:var(--dim); font-style:italic; }
+  .toast {
+    position:fixed; left:50%; bottom:1.5rem; transform:translateX(-50%);
+    background:var(--cookie); color:#1b1410; padding:.6rem 1.1rem;
+    border-radius:8px; font-weight:700; opacity:0; pointer-events:none;
+    transition:opacity .25s;
+  }
+  .toast.on { opacity:1; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+  #logview {
+    background:#000; color:#c8e6a0; border:1px solid var(--edge); border-radius:10px;
+    padding:.9rem 1rem; margin:.6rem 0 0; max-height:22rem; overflow:auto;
+    font-size:.78rem; line-height:1.45; white-space:pre-wrap; word-break:break-word;
+  }
+  #logview .hdr { color:var(--cookie); font-weight:700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🍪 ISOHungry</h1>
+  <div class="sub" id="sub">me eat DVD…</div>
+
+  <h2>Drives</h2>
+  <div id="drives"><div class="card empty">looking for drives…</div></div>
+
+  <h2>Recently eaten</h2>
+  <div id="isos"><div class="card empty">nothing yet</div></div>
+
+  <h2>Logs</h2>
+  <div id="logs"><div class="card empty">no logs yet</div></div>
+  <pre id="logview" hidden></pre>
+
+  <footer>status refreshes every 2s · renaming is the only thing this page can change</footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let editing = null;   // don't clobber an input the user is typing in
+
+const gb = b => b >= 1e9 ? (b/1e9).toFixed(2)+' GB'
+              : b >= 1e6 ? (b/1e6).toFixed(0)+' MB' : (b/1e3).toFixed(0)+' KB';
+
+function hms(start) {
+  if (!start) return '--:--:--';
+  let s = Math.max(0, Math.floor(Date.now()/1000) - start);
+  const h = Math.floor(s/3600), m = Math.floor(s/60)%60;
+  return [h, m, s%60].map(n => String(n).padStart(2,'0')).join(':');
+}
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('on');
+  setTimeout(() => t.classList.remove('on'), 1800);
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(j.error || 'failed'); return null; }
+  return j;
+}
+
+function drawDrives(drives) {
+  const box = $('#drives');
+  if (!drives.length) {
+    box.innerHTML = '<div class="card empty">no drives — plug one in</div>';
+    return;
+  }
+  box.innerHTML = drives.map(d => {
+    const pct = d.bytes_total ? Math.min(100, 100*d.bytes_done/d.bytes_total) : 0;
+    const busy = d.phase === 'ripping' || d.phase === 'iso';
+    const inputId = 'nm-' + d.device;
+    return `
+      <div class="card">
+        <div class="row">
+          <span class="dev">${d.device}</span>
+          <span class="status">${esc(d.status)}</span>
+          <span class="time">${hms(d.start)}</span>
+        </div>
+        ${busy && d.bytes_total ? `
+          <div class="bar"><i style="width:${pct}%"></i></div>
+          <div class="meta">${gb(d.bytes_done)} of ${gb(d.bytes_total)} · ${pct.toFixed(0)}%</div>` : ''}
+        ${busy && d.fp ? `
+          <div class="name-row">
+            <input id="${inputId}" placeholder="name it (applied when finished)"
+                   value="${esc(d.pending_name)}">
+            <button onclick="setName('${d.fp}','${inputId}')">Set</button>
+          </div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function drawIsos(isos) {
+  const box = $('#isos');
+  if (!isos.length) {
+    box.innerHTML = '<div class="card empty">nothing yet — me still hungry</div>';
+    return;
+  }
+  const icon = {movies:'🎬', music:'🎵', data:'💾'};
+  box.innerHTML = isos.map(i => `
+    <div class="card iso">
+      <span class="nm">${icon[i.kind]||'💿'} ${esc(i.name)}</span>
+      <span class="time">${gb(i.size)}${i.tracks ? ' · '+i.tracks+' tracks' : ''}</span>
+      <button class="ghost" onclick="rename('${esc(i.rel)}','${esc(i.name)}')">Rename</button>
+      ${i.kind === 'music' ? ''
+        : `<a class="dl" href="/download/${i.rel.split('/').map(encodeURIComponent).join('/')}">↓</a>`}
+    </div>`).join('');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function setName(fp, inputId) {
+  const el = document.getElementById(inputId);
+  const r = await post('/api/pending', {fp, name: el.value});
+  if (r) toast(r.name ? 'will save as ' + r.name + '.iso' : 'name cleared');
+  editing = null; refresh();
+}
+
+async function rename(rel, shown) {
+  const base = shown.replace(/\.iso$/,'').split('/').pop();
+  const to = prompt('New name for ' + shown + '\n(no extension needed)', base);
+  if (to === null) return;
+  const r = await post('/api/rename', {from: rel, to});
+  if (r) { toast('renamed to ' + r.name); refresh(); }
+}
+
+let openLog = null;
+
+async function drawLogs() {
+  let logs = [];
+  try { logs = await (await fetch('/api/logs')).json(); } catch { return; }
+  const box = $('#logs');
+  if (!logs.length) {
+    box.innerHTML = '<div class="card empty">no logs yet</div>';
+    return;
+  }
+  box.innerHTML = logs.map(l => `
+    <div class="card iso">
+      <span class="nm">${esc(l.name)}</span>
+      <span class="time">${gb(l.size)}</span>
+      <button class="ghost" onclick="viewLog('${esc(l.name)}')">
+        ${openLog === l.name ? 'Hide' : 'View'}
+      </button>
+    </div>`).join('');
+}
+
+async function viewLog(name) {
+  const pre = $('#logview');
+  if (openLog === name) { openLog = null; pre.hidden = true; drawLogs(); return; }
+  openLog = name;
+  await loadLog();
+  drawLogs();
+}
+
+async function loadLog() {
+  if (!openLog) return;
+  const pre = $('#logview');
+  try {
+    const d = await (await fetch('/api/log/' + encodeURIComponent(openLog))).json();
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    pre.innerHTML = `<span class="hdr">${esc(d.name)} — last ${d.lines.length} lines</span>\n\n`
+                  + esc(d.lines.join('\n'));
+    pre.hidden = false;
+    if (atBottom) pre.scrollTop = pre.scrollHeight;   // follow the tail
+  } catch { /* keep whatever is on screen */ }
+}
+
+async function refresh() {
+  let d;
+  try { d = await (await fetch('/api/status')).json(); }
+  catch { $('#sub').textContent = 'lost contact with the kitchen…'; return; }
+
+  const busy = d.drives.filter(x => x.phase === 'ripping' || x.phase === 'iso').length;
+  $('#sub').textContent =
+    `${d.drives.length} drive${d.drives.length===1?'':'s'} · ${busy} eating · ` +
+    `${gb(d.free_bytes)} tummy space left`;
+
+  if (!editing) drawDrives(d.drives);
+  drawIsos(d.isos);
+  drawLogs();
+  loadLog();
+}
+
+// Pause redraws while a name field has focus, so typing isn't interrupted.
+document.addEventListener('focusin',  e => { if (e.target.tagName==='INPUT') editing = e.target.id; });
+document.addEventListener('focusout', e => { if (e.target.tagName==='INPUT') editing = null; });
+
+refresh();
+setInterval(refresh, 2000);
+setInterval(() => document.querySelectorAll('.time').forEach(() => {}), 1000);
+</script>
+</body>
+</html>
