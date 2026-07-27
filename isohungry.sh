@@ -33,6 +33,15 @@ PROBE_TIMEOUT="${PROBE_TIMEOUT:-30}"
 AUDIO_FORMAT="${AUDIO_FORMAT:-mp3}"      # mp3 (LAME -V0 VBR, ~245kbps) or flac
 RIP_DATA_DISCS="${RIP_DATA_DISCS:-1}"    # 0 to ignore non-video, non-audio discs
 
+# A damaged disc can hold a drive for hours: cdparanoia retries a bad sector
+# hard, and each retry on a failing drive costs seconds. Cap the whole rip and
+# keep whatever was readable rather than losing the disc entirely.
+AUDIO_RIP_TIMEOUT="${AUDIO_RIP_TIMEOUT:-5400}"      # seconds; 0 disables
+# Extra cdparanoia flags. Empty means full paranoia (best quality). For a
+# scratched disc, -Y (less paranoia) or -Z (none) trade accuracy for getting
+# past the damage.
+AUDIO_CDPARANOIA_OPTS="${AUDIO_CDPARANOIA_OPTS:-}"
+
 # Persistent, on the output volume. Each disc kind lands in its own subdirectory.
 LOG_DIR="$BASE_OUTPUT_DIR/logs"
 FP_DIR="$BASE_OUTPUT_DIR/.ripped"     # fingerprint -> output name, "have I seen this disc"
@@ -393,6 +402,7 @@ CDDBMETHOD=musicbrainz,cddb
 CDDBCOPYLOCAL=n
 CDDBTOUT=15
 CDROMREADERSYNTAX=cdparanoia
+CDPARANOIAOPTS="$AUDIO_CDPARANOIA_OPTS"
 # abcde has no WRKDIR: its scratch location is WAVOUTPUTDIR, and
 # ABCDETEMPDIR="\$WAVOUTPUTDIR/abcde.\$CDDBDISCID". Left unset it lands at /,
 # so the WAVs pile up in the container layer instead of the output volume -
@@ -422,22 +432,36 @@ EOF
   # shellcheck disable=SC2064
   trap "kill $watch_pid 2>/dev/null" RETURN
 
-  if ! ( cd "$scratch/wrk" && HOME="$scratch" abcde -N -d "$device" -c "$conf" ) >> "$logfile" 2>&1; then
-    # A metadata lookup that times out shouldn't cost you the disc. Retry
-    # without the lookup: untagged audio you can name later beats nothing.
-    echo "=== lookup or rip failed; retrying without metadata lookup" >> "$logfile"
+  local tmo=()
+  (( AUDIO_RIP_TIMEOUT > 0 )) && tmo=(timeout "$AUDIO_RIP_TIMEOUT")
+
+  ( cd "$scratch/wrk" && HOME="$scratch" "${tmo[@]}" abcde -N -d "$device" -c "$conf" ) \
+    >> "$logfile" 2>&1
+  rc=$?
+  (( rc == 124 )) && echo "!!! rip hit AUDIO_RIP_TIMEOUT (${AUDIO_RIP_TIMEOUT}s)" >> "$logfile"
+
+  # Anything encoded is worth keeping, even if the run as a whole failed: a
+  # disc damaged on one track should still give you the other thirteen.
+  if (( rc != 0 )) && [ -z "$(find "$scratch/out" -name "*.$AUDIO_FORMAT" -print -quit 2>/dev/null)" ]; then
+    # Nothing at all came out. A metadata lookup that timed out shouldn't cost
+    # the disc, so try once more without it.
+    echo "=== nothing produced; retrying without metadata lookup" >> "$logfile"
     set_status "$dev_name" "🎵 No match — slurping untagged" "$start"
     rm -rf "$scratch"/.abcde.* "$scratch/wrk" 2>/dev/null
     mkdir -p "$scratch/wrk"
-    sed 's/^ACTIONS=.*/ACTIONS=read,encode,tag,move,clean/' "$conf" > "$conf.nolookup"
-    if ! ( cd "$scratch/wrk" && HOME="$scratch" abcde -N -d "$device" -c "$conf.nolookup" ) >> "$logfile" 2>&1; then
+    sed 's/^ACTIONS=.*/ACTIONS=read,encode,tag,move/' "$conf" > "$conf.nolookup"
+    ( cd "$scratch/wrk" && HOME="$scratch" "${tmo[@]}" abcde -N -d "$device" -c "$conf.nolookup" ) \
+      >> "$logfile" 2>&1
+    if [ -z "$(find "$scratch/out" -name "*.$AUDIO_FORMAT" -print -quit 2>/dev/null)" ]; then
       set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
-      echo "!!! abcde failed, with and without metadata" >> "$logfile"
+      echo "!!! abcde produced nothing, with and without metadata" >> "$logfile"
       rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
       try_eject "$device" "$dev_name" "$start" "$label"
       return 1
     fi
     echo "=== ripped without metadata; rename it from the web UI" >> "$logfile"
+  elif (( rc != 0 )); then
+    echo "=== rip ended badly (rc=$rc) but tracks were produced; keeping them" >> "$logfile"
   fi
 
   # Stop the watcher before writing any final status, or it would overwrite it
@@ -456,6 +480,33 @@ EOF
   fi
 
   tag_album "$scratch" "$album_src" "$logfile"
+
+  # Which tracks did the disc refuse to give up? Record them next to the music
+  # rather than leaving a silently short album.
+  local got missing n
+  got=$(find "$album_src" -maxdepth 1 -type f -name "*.$AUDIO_FORMAT" | wc -l)
+  missing=""
+  if (( tracks > 0 )) && (( got < tracks )); then
+    for (( n = 1; n <= tracks; n++ )); do
+      find "$album_src" -maxdepth 1 -name "$(printf '%02d' "$n") - *" -print -quit 2>/dev/null \
+        | grep -q . || missing+="${missing:+, }$n"
+    done
+    {
+      echo "Some tracks could not be read from this disc."
+      echo
+      echo "missing tracks : ${missing:-unknown}"
+      echo "got            : $got of $tracks"
+      echo "device         : $device"
+      echo "when           : $(date -Is)"
+      echo
+      echo "Usually a scratch or a failing drive. The read errors are in"
+      echo "logs/$dev_name.log. To try again, delete the marker for this disc"
+      echo "in .ripped/ and reinsert it - ideally in a different drive, or with"
+      echo "AUDIO_CDPARANOIA_OPTS=-Z to push past the damage at some cost to"
+      echo "accuracy."
+    } > "$album_src/UNREADABLE_TRACKS.txt"
+    echo "!!! unreadable tracks: $missing (got $got of $tracks)" >> "$logfile"
+  fi
 
   album_rel=${album_src#"$scratch/out/"}
   if friendly=$(pending_name "$fp"); then
@@ -479,9 +530,15 @@ EOF
   write_meta "$dev_name" \
     "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=audio" \
     "total_bytes=$total_bytes" "iso_path=$target" "phase=done"
-  set_status "$dev_name" "🤤 BUUURP! Me ate ${target##*/}" "$start"
-  try_eject "$device" "$dev_name" "$start" "$label" && \
-    set_status "$dev_name" "💨 BURP! Spit out ${target##*/}" "$start"
+  if [ -n "$missing" ]; then
+    set_status "$dev_name" "🤕 Ate $got/$tracks — track $missing no good" "$start"
+    try_eject "$device" "$dev_name" "$start" "$label" && \
+      set_status "$dev_name" "🤕 Spit out ${target##*/} — missing track $missing" "$start"
+  else
+    set_status "$dev_name" "🤤 BUUURP! Me ate ${target##*/}" "$start"
+    try_eject "$device" "$dev_name" "$start" "$label" && \
+      set_status "$dev_name" "💨 BURP! Spit out ${target##*/}" "$start"
+  fi
   rm -f "$LOCK_DIR/$dev_name"
 }
 

@@ -72,7 +72,9 @@ RUN echo /usr/lib/dvdcss > /etc/ld.so.conf.d/dvdcss.conf && ldconfig
 COPY isohungry.sh /usr/local/bin/isohungry
 COPY entrypoint.sh /usr/local/bin/entrypoint
 COPY web/ /opt/isohungry/
-RUN chmod +x /usr/local/bin/isohungry /usr/local/bin/entrypoint
+COPY scripts/retag-music.sh /opt/isohungry/retag-music.sh
+RUN chmod +x /usr/local/bin/isohungry /usr/local/bin/entrypoint \
+             /opt/isohungry/retag-music.sh
 
 # C.UTF-8 makes bash count characters rather than bytes, so the status line
 # no longer slices emoji in half mid-scroll.

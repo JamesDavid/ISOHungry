@@ -234,6 +234,8 @@ which belongs in a `.env` file beside it because it's machine-specific.
 | `PROBE_TIMEOUT` | `30` | Seconds before a wedged drive is given up on |
 | `GENERIC_LABELS` | see script | Labels too common to trust as filenames |
 | `AUDIO_FORMAT` | `mp3` | `mp3` (LAME `-V0`, ~245 kbps VBR) or `flac` |
+| `AUDIO_RIP_TIMEOUT` | `5400` | Seconds before an audio rip gives up; `0` disables |
+| `AUDIO_CDPARANOIA_OPTS` | — | Extra cdparanoia flags; `-Y` or `-Z` for damaged discs |
 | `RIP_DATA_DISCS` | `1` | `0` to ignore non-video, non-audio discs |
 | `WEB_UI` / `WEB_PORT` | `1` / `8080` | Web status page |
 | `WEB_BIND` *(.env)* | `127.0.0.1` | Interface the UI listens on |
@@ -292,6 +294,27 @@ MusicBrainz lookup that failed alongside a read error; the log has both.
 **Music has no artist or album name** — MusicBrainz had no match for that
 disc, so `abcde` fell back to placeholder names. Rename it from the web UI, or
 name it while it rips.
+
+**`🤕 Ate 13/14 — track 1 no good`** — the disc wouldn't give up every track.
+What was readable is kept, and `UNREADABLE_TRACKS.txt` in the album folder
+lists what's missing. The read errors are in the log. Usually a scratch or a
+failing drive: try the disc in another drive, or push past the damage with
+`AUDIO_CDPARANOIA_OPTS=-Z` (faster, less accurate). To retry, delete the
+disc's marker in `out/.ripped/` and reinsert it.
+
+**A rip grinds for hours on one track** — cdparanoia retries a bad sector
+hard, and on a failing drive each retry costs seconds. `AUDIO_RIP_TIMEOUT`
+(default 90 min) caps it and keeps whatever was read.
+
+**Music files have no embedded tags** — for albums ripped before this was
+fixed, retag them from their filenames:
+
+```bash
+docker exec isohungry /opt/isohungry/retag-music.sh --dry-run   # preview
+docker exec isohungry /opt/isohungry/retag-music.sh             # apply
+```
+
+It skips files that already have tags unless you pass `--force`.
 
 **Rename says "file is in use"** — something has the file open. On Windows the
 usual culprit is the ISO being *mounted* as a virtual drive: double-clicking an
