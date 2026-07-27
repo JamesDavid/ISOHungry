@@ -8,6 +8,9 @@ wsl-kernel/
 bzImage
 kernel-config
 
+# Machine-specific settings (bind address etc.)
+.env
+
 # Editor / OS noise
 .vscode/
 .idea/

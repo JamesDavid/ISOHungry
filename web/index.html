@@ -114,12 +114,19 @@ function toast(msg) {
 }
 
 async function post(url, body) {
-  const r = await fetch(url, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body)
-  });
+  let r;
+  try {
+    r = await fetch(url, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  } catch (e) {
+    // Connection died outright — say so rather than failing silently.
+    toast('no answer from the kitchen');
+    return null;
+  }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { toast(j.error || 'failed'); return null; }
+  if (!r.ok) { toast(j.error || ('failed (' + r.status + ')')); return null; }
   return j;
 }
 

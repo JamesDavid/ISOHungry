@@ -8,10 +8,12 @@ destroy data through this server.
 
 Runs alongside the terminal display, reading the same state files the TUI does.
 """
+import errno
 import json
 import os
 import re
 import shutil
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
@@ -218,8 +220,35 @@ class Handler(BaseHTTPRequestHandler):
                 return path
         return None
 
+    # An unhandled exception in a handler closes the connection with no
+    # response at all, which surfaces in the browser as a silent failure.
+    # Always answer, even if the answer is "something went wrong".
+    def handle_one_request(self):
+        try:
+            BaseHTTPRequestHandler.handle_one_request(self)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _guard(self, fn):
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError):
+            raise
+        except Exception:
+            traceback.print_exc()
+            try:
+                self._send(500, {"error": "internal error — see container logs"})
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------ GET
     def do_GET(self):
+        self._guard(self._do_GET)
+
+    def do_POST(self):
+        self._guard(self._do_POST)
+
+    def _do_GET(self):
         path = self.path.split("?", 1)[0]
 
         if path in ("/", "/index.html"):
@@ -300,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     # ----------------------------------------------------------------- POST
-    def do_POST(self):
+    def _do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         if length > 64 * 1024:
             self._send(413, {"error": "too large"})
@@ -352,7 +381,17 @@ class Handler(BaseHTTPRequestHandler):
             if os.path.exists(dst):
                 self._send(409, {"error": "something with that name already exists"})
                 return
-            os.rename(src, dst)
+            try:
+                os.rename(src, dst)
+            except OSError as e:
+                # The usual cause is the file being held open elsewhere — on
+                # Windows, mounting an ISO as a virtual drive locks it.
+                if e.errno in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ETXTBSY):
+                    self._send(409, {"error": "file is in use — if you mounted "
+                                              "this ISO, eject it and try again"})
+                else:
+                    self._send(500, {"error": "rename failed: %s" % e.strerror})
+                return
 
             root = os.path.realpath(OUTPUT_DIR)
             old_rel = os.path.relpath(src, root).replace(os.sep, "/")
