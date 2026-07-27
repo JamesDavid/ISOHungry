@@ -58,6 +58,7 @@ RUN set -eux; \
         libcdio-utils \
         lame \
         flac \
+        eyed3 \
         id3v2 \
         vorbis-tools \
         curl; \
@@ -68,10 +69,10 @@ COPY --from=dvdcss /staging/usr/lib/dvdcss/ /usr/lib/dvdcss/
 COPY --from=dvdcss /staging/usr/bin/gum /usr/bin/gum
 RUN echo /usr/lib/dvdcss > /etc/ld.so.conf.d/dvdcss.conf && ldconfig
 
-COPY 04_gum_auto_dvd_backup.sh /usr/local/bin/auto-dvd-backup
+COPY isohungry.sh /usr/local/bin/isohungry
 COPY entrypoint.sh /usr/local/bin/entrypoint
 COPY web/ /opt/isohungry/
-RUN chmod +x /usr/local/bin/auto-dvd-backup /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/isohungry /usr/local/bin/entrypoint
 
 # C.UTF-8 makes bash count characters rather than bytes, so the status line
 # no longer slices emoji in half mid-scroll.

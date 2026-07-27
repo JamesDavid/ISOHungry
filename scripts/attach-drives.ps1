@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
   Attaches every connected USB optical drive into the WSL2 VM so containers see
   them as /dev/sr0, /dev/sr1, ...
 
 .DESCRIPTION
-  Run this after every reboot or `wsl --shutdown` — usbip attachments do not
+  Run this after every reboot or `wsl --shutdown` - usbip attachments do not
   survive either. Binding persists; attaching does not.
 
   Drives are matched by USB instance ID rather than vendor/product ID, so two
@@ -31,7 +31,7 @@ param([switch]$Detach)
 $ErrorActionPreference = 'Stop'
 $repo      = Split-Path $PSScriptRoot -Parent
 $usbipdExe = Join-Path $env:ProgramFiles 'usbipd-win\usbipd.exe'
-$image     = 'auto-dvd-backup:latest'
+$image     = 'isohungry:latest'
 
 function Info { param($m) Write-Host $m -ForegroundColor Cyan }
 function Ok   { param($m) Write-Host "  $m" -ForegroundColor Green }
@@ -47,11 +47,28 @@ Info "`nLooking for USB optical drives"
 
 $cdroms = @(Get-PnpDevice -Class CDROM -ErrorAction SilentlyContinue |
             Where-Object { $_.Present -and $_.InstanceId -like 'USBSTOR*' })
+$state = (& $usbipdExe state | ConvertFrom-Json).Devices
+
+# A drive that is already attached has left Windows entirely, so it no longer
+# appears as a CDROM device here. Finding none is therefore normal when
+# everything is already attached - not a reason to tell the user to plug a
+# drive in.
+$attached = @($state | Where-Object { $_.ClientIPAddress })
 if ($cdroms.Count -eq 0) {
+  if ($attached.Count -gt 0 -and -not $Detach) {
+    Ok "$($attached.Count) device(s) already attached to WSL; nothing new to attach"
+    foreach ($a in $attached) { Ok "  bus $($a.BusId)  $($a.Description)" }
+    $devs = docker run --rm --privileged -v /dev:/dev --entrypoint sh $image -c "ls /dev/sr* 2>/dev/null"
+    if ($devs) {
+      Info "`nVisible to containers:"
+      foreach ($d in ($devs -split "`n" | Where-Object { $_ -match '\S' })) { Ok $d.Trim() }
+    }
+    Write-Host ""
+    exit 0
+  }
   Die "No USB optical drives found. Plug one in. (Internal SATA drives cannot be forwarded into WSL2.)"
 }
 
-$state = (& $usbipdExe state | ConvertFrom-Json).Devices
 $targets = @()
 
 foreach ($cd in $cdroms) {
@@ -61,7 +78,7 @@ foreach ($cd in $cdroms) {
     $targets += [pscustomobject]@{ BusId = $match.BusId; Name = $cd.FriendlyName }
     Ok "$($cd.FriendlyName)  ->  bus $($match.BusId)"
   } else {
-    Warn "$($cd.FriendlyName) — no matching USB device (built-in drive?), skipping"
+    Warn "$($cd.FriendlyName) - no matching USB device (built-in drive?), skipping"
   }
 }
 if ($targets.Count -eq 0) { Die "No drives could be mapped to a USB bus ID." }
@@ -78,17 +95,36 @@ if ($Detach) {
 }
 
 # --- bind (needs admin; one prompt for all drives) --------------------------
+# Bound state comes from the state JSON, not the text table: the table prints
+# "Not shared" for unbound devices, and a naive -match 'Shared' matches that
+# too, so every unbound drive looked bound and the attach then failed.
 $needBind = @($targets | Where-Object {
-  $line = & $usbipdExe list | Select-String "^$($_.BusId)\s"
-  $line -notmatch 'Shared|Attached'
+  $d = $state | Where-Object BusId -eq $_.BusId
+  -not $d.PersistedGuid
 })
 
 if ($needBind.Count -gt 0) {
-  Info "`nBinding $($needBind.Count) drive(s) — accept the UAC prompt"
-  $cmd = ($needBind | ForEach-Object { "bind --busid $($_.BusId)" }) -join '; & "' + $usbipdExe + '" '
-  $args = "-NoProfile -Command `"& '$usbipdExe' " + (($needBind | ForEach-Object { "bind --busid $($_.BusId)" }) -join "; & '$usbipdExe' ") + "`""
-  $p = Start-Process powershell -ArgumentList $args -Verb RunAs -Wait -PassThru
-  if ($p.ExitCode -ne 0) { Die "Bind failed (exit $($p.ExitCode)). Try manually: usbipd bind --busid <id>" }
+  Info "`nBinding $($needBind.Count) drive(s) - accept the UAC prompt"
+  # One elevation for all drives. Written to a script file rather than passed
+  # inline: quoting a -Command string through Start-Process is fragile, and
+  # $args is a reserved automatic variable that must not be assigned.
+  $bindScript = Join-Path $env:TEMP 'isohungry-bind.ps1'
+  $lines = @("`$ErrorActionPreference='Stop'", "try {")
+  foreach ($t in $needBind) { $lines += "  & '$usbipdExe' bind --busid $($t.BusId)" }
+  $lines += "  'OK' | Set-Content '$env:TEMP\isohungry-bind.log'"
+  $lines += "} catch { `"ERR: `$(`$_.Exception.Message)`" | Set-Content '$env:TEMP\isohungry-bind.log' }"
+  $lines -join "`n" | Set-Content $bindScript -Encoding UTF8
+
+  Remove-Item "$env:TEMP\isohungry-bind.log" -ErrorAction SilentlyContinue
+  $p = Start-Process powershell -ArgumentList @(
+        '-NoProfile','-ExecutionPolicy','Bypass','-File',$bindScript
+      ) -Verb RunAs -Wait -PassThru
+  $bindResult = if (Test-Path "$env:TEMP\isohungry-bind.log") {
+                  Get-Content "$env:TEMP\isohungry-bind.log" -Raw
+                } else { 'no result (UAC declined?)' }
+  if ($p.ExitCode -ne 0 -or $bindResult -notmatch '^OK') {
+    Die "Bind failed: $($bindResult.Trim())`nTry manually from an admin shell: usbipd bind --busid <id>"
+  }
   foreach ($t in $needBind) { Ok "bound bus $($t.BusId)" }
 } else {
   Ok "All drives already bound"

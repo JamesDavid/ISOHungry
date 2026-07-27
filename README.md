@@ -323,7 +323,7 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 
 | Path | Purpose |
 |---|---|
-| `04_gum_auto_dvd_backup.sh` | The ripper |
+| `isohungry.sh` | The ripper |
 | `web/server.py`, `web/index.html` | Web status page (stdlib only) |
 | `entrypoint.sh` | Starts the web UI, then runs the terminal display |
 | `Dockerfile` | Two stages: libdvdcss + gum, then a Debian runtime |

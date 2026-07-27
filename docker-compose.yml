@@ -1,8 +1,8 @@
 services:
-  dvd-backup:
+  isohungry:
     build: .
-    image: auto-dvd-backup:latest
-    container_name: auto-dvd-backup
+    image: isohungry:latest
+    container_name: isohungry
 
     # Needed to open raw optical block devices and issue the SCSI eject ioctl.
     privileged: true

@@ -10,4 +10,4 @@ if [ "${WEB_UI:-1}" = "1" ]; then
   trap 'kill "$WEB_PID" 2>/dev/null' EXIT
 fi
 
-exec /usr/local/bin/auto-dvd-backup "$@"
+exec /usr/local/bin/isohungry "$@"

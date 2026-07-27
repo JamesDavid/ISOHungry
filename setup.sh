@@ -64,7 +64,7 @@ case "$(uname -s)" in
     echo "  1. Run the ripper natively (no Docker):"
     echo "       brew install dvdbackup cdrtools"
     echo "       BASE_OUTPUT_DIR=\"\$HOME/Videos/DVDs\" DEVICE_GLOB='/dev/disk*' \\"
-    echo "         ./04_gum_auto_dvd_backup.sh"
+    echo "         ./isohungry.sh"
     echo "     Note macOS names optical devices /dev/disk*, not /dev/sr*, and ships"
     echo "     no libdvdcss — encrypted discs need it from Homebrew."
     echo "  2. Run this repo on a Linux box that has the drives attached."

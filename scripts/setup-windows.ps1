@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   One-time Windows setup for AutoDVDBackup.
 
@@ -36,7 +36,7 @@ function Ok   { param($m) Write-Host "  $m" -ForegroundColor Green }
 function Warn { param($m) Write-Host "  $m" -ForegroundColor Yellow }
 function Die  { param($m) Write-Host $m -ForegroundColor Red; exit 1 }
 
-Write-Host "`nAutoDVDBackup — Windows setup`n" -ForegroundColor White
+Write-Host "`nAutoDVDBackup - Windows setup`n" -ForegroundColor White
 
 # ---------------------------------------------------------------- 1. prereqs
 Info "[1/5] Checking prerequisites"
@@ -57,7 +57,7 @@ Info "`n[2/5] Custom WSL2 kernel"
 if ((Test-Path $bzImage) -and -not $Force) {
   Ok "Already built at $bzImage (use -Force to rebuild)"
 } else {
-  Warn "Building — this compiles Linux and takes roughly 10-30 minutes."
+  Warn "Building - this compiles Linux and takes roughly 10-30 minutes."
   New-Item -ItemType Directory -Force $kernelDir | Out-Null
   docker run --rm `
     -v "${kernelDir}:/out" `
@@ -105,7 +105,7 @@ Info "`n[4/5] usbipd-win (USB passthrough)"
 if (Test-Path $usbipdExe) {
   Ok "Already installed ($(& $usbipdExe --version 2>&1 | Select-Object -First 1))"
 } else {
-  Warn "Installing — accept the UAC prompt when it appears."
+  Warn "Installing - accept the UAC prompt when it appears."
   winget install --id dorssel.usbipd-win --exact --accept-source-agreements --accept-package-agreements
   if (-not (Test-Path $usbipdExe)) {
     Die "usbipd-win did not install. Run manually: winget install --id dorssel.usbipd-win --exact"
@@ -145,7 +145,7 @@ Ok "Kernel: $($lines[0].Trim())"
 if ($lines[1].Trim() -eq '2') {
   Ok "Optical drivers enabled (BLK_DEV_SR + USB_STORAGE)"
 } else {
-  Die "Drivers missing. The custom kernel may not have loaded — check $wslConfig."
+  Die "Drivers missing. The custom kernel may not have loaded - check $wslConfig."
 }
 
 Info "`nBuilding the ripper image"

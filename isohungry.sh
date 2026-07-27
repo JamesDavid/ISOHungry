@@ -277,10 +277,17 @@ rip_audio() {
 
   rm -rf "$scratch"; mkdir -p "$scratch"
 
+  mkdir -p "$scratch/wrk"
   cat > "$conf" <<EOF
-CDDBMETHOD=musicbrainz
+# Try MusicBrainz, then fall back to gnudb: one flaky lookup shouldn't decide
+# whether the disc gets ripped at all.
+CDDBMETHOD=musicbrainz,cddb
 CDDBCOPYLOCAL=n
+CDDBTOUT=15
 CDROMREADERSYNTAX=cdparanoia
+# Without this abcde writes its temp WAVs to /, filling the container layer
+# instead of the output volume.
+WRKDIR="$scratch/wrk"
 OUTPUTDIR="$scratch/out"
 OUTPUTTYPE="$AUDIO_FORMAT"
 LAMEOPTS="-V 0 --vbr-new -q 0"
@@ -296,11 +303,21 @@ EOF
 
   set_status "$dev_name" "🎵 NOM NOM! Slurping $label" "$start"
   if ! HOME="$scratch" abcde -N -d "$device" -c "$conf" >> "$logfile" 2>&1; then
-    set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
-    echo "!!! abcde failed" >> "$logfile"
-    rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
-    try_eject "$device" "$dev_name" "$start" "$label"
-    return 1
+    # A metadata lookup that times out shouldn't cost you the disc. Retry
+    # without the lookup: untagged audio you can name later beats nothing.
+    echo "=== lookup or rip failed; retrying without metadata lookup" >> "$logfile"
+    set_status "$dev_name" "🎵 No match — slurping untagged" "$start"
+    rm -rf "$scratch"/.abcde.* "$scratch/wrk" 2>/dev/null
+    mkdir -p "$scratch/wrk"
+    sed 's/^ACTIONS=.*/ACTIONS=read,encode,tag,move,clean/' "$conf" > "$conf.nolookup"
+    if ! HOME="$scratch" abcde -N -d "$device" -c "$conf.nolookup" >> "$logfile" 2>&1; then
+      set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
+      echo "!!! abcde failed, with and without metadata" >> "$logfile"
+      rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"
+      try_eject "$device" "$dev_name" "$start" "$label"
+      return 1
+    fi
+    echo "=== ripped without metadata; rename it from the web UI" >> "$logfile"
   fi
 
   # abcde writes <artist>/<album>/; find the deepest directory holding tracks.
@@ -596,13 +613,19 @@ while true; do
     printf -v STAMP '%(%Y-%m-%d_%H%M%S)T' -1
 
     # Audio CDs get their names from MusicBrainz inside abcde, so the ISO-style
-    # naming below doesn't apply to them.
+    # naming below doesn't apply. An audio CD also carries no volume label, so
+    # blkid gives nothing and "unknown_sr0" would be the only thing on screen —
+    # describe the disc from its table of contents instead.
     if [ "$KIND" = audio ]; then
+      read -ra TOC_FIELDS <<< "$TOC"
+      TRACKS=${TOC_FIELDS[1]:-?}
+      MINS=$(( DISC_BYTES / 176400 / 60 ))
+      AUDIO_LABEL="CD, $TRACKS tracks, ${MINS}min"
       printf '%s' "$FP" > "$HANDLED_DIR/$DEV_NAME"
       touch "$LOCKFILE"
       printf -v START_TIME '%(%s)T' -1
-      set_status "$DEV_NAME" "🎵 NOM NOM! Slurping CD" "$START_TIME"
-      rip_audio "$DEVICE" "$DEV_NAME" "" "$LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
+      set_status "$DEV_NAME" "🎵 NOM NOM! Slurping $AUDIO_LABEL" "$START_TIME"
+      rip_audio "$DEVICE" "$DEV_NAME" "" "$AUDIO_LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
       RIP_PIDS+=("$!")
       continue
     fi
