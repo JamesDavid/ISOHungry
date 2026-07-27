@@ -19,6 +19,13 @@ sr3   | 🍪 Me hungry... feed me disc!    | --:--:--
 There's a web UI too, on `:8080` — same information, plus a log viewer, and
 you can name a disc while it's still ripping.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/web-ui-dark.png">
+    <img src="docs/web-ui.png" alt="ISOHungry web UI on a phone: two drives ripping with progress bars, finished films, an album and a data image below" width="330">
+  </picture>
+</p>
+
 ---
 
 ## Quick start
@@ -332,4 +339,18 @@ a throwaway stage, so `libdvdread` finds it at rip time with nothing extra to
 install. Audio CDs go through `abcde`, which wraps cdparanoia, MusicBrainz and
 LAME/FLAC.
 
-Rip only discs you're entitled to copy — rules vary by jurisdiction.
+---
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, hobby,
+research and educational use. Commercial use or resale requires a separate
+written licence from the author.
+
+ISOHungry ships no third-party code itself. The container image installs
+dvdbackup, cdrkit, libdvdcss, abcde, cdparanoia, LAME, FLAC and usbip at build
+time, and each stays under its own terms (mostly GPL/LGPL); `gum` is MIT, and
+the custom WSL2 kernel remains GPLv2.
+
+Rip only discs you're entitled to copy — rules vary by jurisdiction, and what
+you do with this is on you.

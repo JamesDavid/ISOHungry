@@ -55,8 +55,15 @@
                  border:1px solid var(--edge); font-weight:400; }
   a.dl { color:var(--cookie); text-decoration:none; font-weight:700; }
   a.dl:hover { text-decoration:underline; }
-  .iso { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; }
-  .iso .nm { flex:1; min-width:11rem; word-break:break-all; }
+  /* Narrow screens: the name takes its own line and the size + actions sit
+     below it, rather than the download arrow wrapping off on its own. */
+  .iso { display:flex; align-items:center; gap:.5rem .6rem; flex-wrap:wrap; }
+  .iso .nm { flex:1 1 100%; word-break:break-word; }
+  .iso .time { margin-right:auto; }
+  @media (min-width: 520px) {
+    .iso .nm { flex:1 1 auto; min-width:11rem; }
+    .iso .time { margin-right:0; }
+  }
   .empty { color:var(--dim); font-style:italic; }
   .toast {
     position:fixed; left:50%; bottom:1.5rem; transform:translateX(-50%);
@@ -106,7 +113,9 @@ const $ = s => document.querySelector(s);
 let editing = null;   // don't clobber an input the user is typing in
 
 const gb = b => b >= 1e9 ? (b/1e9).toFixed(2)+' GB'
-              : b >= 1e6 ? (b/1e6).toFixed(0)+' MB' : (b/1e3).toFixed(0)+' KB';
+              : b >= 1e6 ? (b/1e6).toFixed(0)+' MB'
+              : b >= 1e3 ? (b/1e3).toFixed(0)+' KB'
+              : (b|0)+' B';   // sub-KB files read "0 KB" otherwise
 
 function hms(start) {
   if (!start) return '--:--:--';
