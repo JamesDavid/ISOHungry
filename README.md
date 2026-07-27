@@ -134,6 +134,11 @@ every drive, what it's eating, progress bars, finished items with download
 links, and a log viewer. The terminal display stays exactly as it was; the web
 UI is additive and reads the same state files.
 
+Progress is measured in whatever unit is honest for the disc: bytes for films
+and data images, **tracks for audio CDs**. Encoded audio is a small fraction of
+the raw disc, so measuring bytes against CD size would show a finished album
+sitting at about 10%.
+
 Two things it can change, and nothing else: **name a rip while it's running**
 (applied when the ISO is finalised, so you can type the real film title while
 the disc spins) and **rename a finished item**, which keeps its fingerprint

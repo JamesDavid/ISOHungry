@@ -154,9 +154,15 @@ function drawDrives(drives) {
     return;
   }
   box.innerHTML = drives.map(d => {
-    const pct = d.bytes_total ? Math.min(100, 100*d.bytes_done/d.bytes_total) : 0;
     const busy = d.phase === 'ripping' || d.phase === 'iso';
     const inputId = 'nm-' + d.device;
+    // Audio progresses in tracks; everything else in bytes. Encoded audio is a
+    // fraction of the raw disc, so bytes would badly understate an audio rip.
+    const byTrack = d.kind === 'audio' && d.tracks_total > 0;
+    const pct = byTrack ? Math.min(100, 100*d.tracks_done/d.tracks_total)
+              : d.bytes_total ? Math.min(100, 100*d.bytes_done/d.bytes_total) : 0;
+    const detail = byTrack ? `track ${d.tracks_done} of ${d.tracks_total}`
+                 : d.bytes_total ? `${gb(d.bytes_done)} of ${gb(d.bytes_total)}` : '';
     return `
       <div class="card">
         <div class="row">
@@ -164,9 +170,9 @@ function drawDrives(drives) {
           <span class="status">${esc(d.status)}</span>
           <span class="time">${hms(d.start)}</span>
         </div>
-        ${busy && d.bytes_total ? `
+        ${busy && detail ? `
           <div class="bar"><i style="width:${pct}%"></i></div>
-          <div class="meta">${gb(d.bytes_done)} of ${gb(d.bytes_total)} · ${pct.toFixed(0)}%</div>` : ''}
+          <div class="meta">${detail} · ${pct.toFixed(0)}%</div>` : ''}
         ${busy && d.fp ? `
           <div class="name-row">
             <input id="${inputId}" placeholder="name it (applied when finished)"

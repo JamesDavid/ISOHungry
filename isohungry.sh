@@ -248,6 +248,22 @@ write_meta() {
   printf '%s\n' "$@" > "$META_DIR/$dev_name"
 }
 
+# Track-based progress for audio CDs. Bytes are the wrong unit there: abcde
+# rips a WAV then replaces it with a far smaller encoded file, so measuring the
+# scratch directory against the raw CDDA size crawls and finishes around 10%.
+# Written to its own file so the watcher never races write_meta.
+write_progress() {
+  local dev_name=$1 done_n=$2 total_n=$3 prev_total=""
+  if [ -z "$total_n" ] && [ -f "$META_DIR/$dev_name.progress" ]; then
+    prev_total=$(sed -n 's/^tracks_total=//p' "$META_DIR/$dev_name.progress" | head -1)
+    total_n=$prev_total
+  fi
+  {
+    printf 'tracks_done=%s\n' "${done_n:-0}"
+    printf 'tracks_total=%s\n' "${total_n:-0}"
+  } > "$META_DIR/$dev_name.progress"
+}
+
 # Resolve the friendly name set from the web UI, if any. Echoes it or nothing.
 pending_name() {
   local fp=$1 friendly
@@ -282,8 +298,10 @@ audio_progress_watch() {
 
     if [[ "$line" =~ track\ ([0-9]+)\ of\ ([0-9]+) ]]; then
       set_status "$dev_name" "🎵 Track ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}: $subject" "$start"
+      write_progress "$dev_name" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     elif [[ "$line" =~ track\ ([0-9]+) ]]; then
       set_status "$dev_name" "🎵 Track ${BASH_REMATCH[1]}: $subject" "$start"
+      write_progress "$dev_name" "${BASH_REMATCH[1]}" ""
     elif [ -n "$album" ]; then
       set_status "$dev_name" "🎵 NOM NOM! $subject" "$start"
     fi
@@ -295,7 +313,7 @@ audio_progress_watch() {
 # tag and file layout. We rip into scratch and move the finished album into
 # place, so a killed run never leaves a half-encoded album in the library.
 rip_audio() {
-  local device=$1 dev_name=$2 label=$4 fp=$5 start=$6 total_bytes=${7:-0}
+  local device=$1 dev_name=$2 label=$4 fp=$5 start=$6 total_bytes=${7:-0} tracks=${8:-0}
   local logfile="$LOG_DIR/$dev_name.log"
   local scratch="$WORK_DIR/$dev_name"
   local conf="$scratch/abcde.conf"
@@ -303,7 +321,8 @@ rip_audio() {
 
   write_meta "$dev_name" \
     "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=audio" \
-    "total_bytes=$total_bytes" "scratch=$scratch" "phase=ripping"
+    "total_bytes=$total_bytes" "tracks_total=$tracks" "scratch=$scratch" "phase=ripping"
+  write_progress "$dev_name" 0 "$tracks"
 
   echo "=== $(date -Is) $dev_name  AUDIO CD  fp=$fp  format=$AUDIO_FORMAT" >> "$logfile"
 
@@ -465,7 +484,7 @@ rip_disc() {
   local extract_dir friendly stamp
 
   write_meta "$dev_name" \
-    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=video" \
     "total_bytes=$total_bytes" "iso_path=$iso_path" "scratch=$scratch" "phase=ripping"
 
   {
@@ -496,7 +515,7 @@ rip_disc() {
   # Build to .partial and rename only on success, so an interrupted run can
   # never leave a truncated ISO that later looks like a completed rip.
   write_meta "$dev_name" \
-    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=video" \
     "total_bytes=$total_bytes" "iso_path=$iso_path" "scratch=$scratch" "phase=iso"
   set_status "$dev_name" "😋 Om nom nom... chewing into ISO" "$start"
   if ! genisoimage -dvd-video -o "$partial" "$(dirname "$extract_dir")" >> "$logfile" 2>&1; then
@@ -524,7 +543,7 @@ rip_disc() {
 
   rm -rf "$scratch"
   write_meta "$dev_name" \
-    "device=$device" "label=$label" "fp=$fp" "start=$start" \
+    "device=$device" "label=$label" "fp=$fp" "start=$start" "kind=video" \
     "total_bytes=$total_bytes" "iso_path=$iso_path" "phase=done"
   set_status "$dev_name" "🤤 BUUURP! Me ate $label" "$start"
   try_eject "$device" "$dev_name" "$start" "$label" && \
@@ -600,7 +619,7 @@ while true; do
     fi
 
     if [ -z "$KIND" ]; then
-      rm -f "$HANDLED_DIR/$DEV_NAME" "$META_DIR/$DEV_NAME"
+      rm -f "$HANDLED_DIR/$DEV_NAME" "$META_DIR/$DEV_NAME" "$META_DIR/$DEV_NAME.progress"
       set_status "$DEV_NAME" "🍪 Me hungry... feed me disc!" ""
       continue
     fi
@@ -672,7 +691,7 @@ while true; do
       touch "$LOCKFILE"
       printf -v START_TIME '%(%s)T' -1
       set_status "$DEV_NAME" "🎵 NOM NOM! Slurping $AUDIO_LABEL" "$START_TIME"
-      rip_audio "$DEVICE" "$DEV_NAME" "" "$AUDIO_LABEL" "$FP" "$START_TIME" "$DISC_BYTES" &
+      rip_audio "$DEVICE" "$DEV_NAME" "" "$AUDIO_LABEL" "$FP" "$START_TIME" "$DISC_BYTES" "$TRACKS" &
       RIP_PIDS+=("$!")
       continue
     fi

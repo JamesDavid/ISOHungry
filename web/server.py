@@ -82,10 +82,20 @@ def collect_drives():
         done = 0
         scratch = meta.get("scratch")
         phase = meta.get("phase", "")
-        if phase == "ripping" and scratch and os.path.isdir(scratch):
-            done = dir_size(scratch)
-        elif phase in ("iso", "done") and total:
-            done = total
+        kind = meta.get("kind", "")
+
+        # Audio is measured in tracks, not bytes: abcde replaces each ripped
+        # WAV with a much smaller encoded file, so bytes-on-disk against the
+        # raw CDDA size would crawl and finish near 10%.
+        prog = read_kv(os.path.join(META_DIR, dev + ".progress"))
+        tracks_done = int(prog.get("tracks_done") or 0)
+        tracks_total = int(prog.get("tracks_total") or meta.get("tracks_total") or 0)
+
+        if kind != "audio":
+            if phase == "ripping" and scratch and os.path.isdir(scratch):
+                done = dir_size(scratch)
+            elif phase in ("iso", "done") and total:
+                done = total
 
         drives.append({
             "device": dev,
@@ -93,9 +103,12 @@ def collect_drives():
             "start": int(start) if start.isdigit() else None,
             "label": meta.get("label", ""),
             "fp": meta.get("fp", ""),
+            "kind": kind,
             "phase": phase,
             "bytes_done": done,
-            "bytes_total": total,
+            "bytes_total": 0 if kind == "audio" else total,
+            "tracks_done": tracks_done,
+            "tracks_total": tracks_total,
             "pending_name": read_pending(meta.get("fp", "")),
         })
     return drives
