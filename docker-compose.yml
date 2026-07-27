@@ -14,10 +14,11 @@ services:
       - /dev:/dev
       - ./out:/output
 
-    # Web UI. Bound to localhost only — it can serve multi-GB ISOs and has no
-    # authentication, so change to "8080:8080" only on a network you trust.
+    # Web UI. Localhost-only by default: it serves multi-GB files and has no
+    # authentication. To reach it from other machines, put WEB_BIND=0.0.0.0 in
+    # a .env file next to this one — and only on a network you trust.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${WEB_BIND:-127.0.0.1}:8080:8080"
 
     environment:
       BASE_OUTPUT_DIR: /output

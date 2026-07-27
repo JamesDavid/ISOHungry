@@ -119,9 +119,55 @@ Two things it can change, and nothing else: **name a rip while it's running**
 the disc spins) and **rename a finished item**, which keeps its fingerprint
 marker in step so the disc stays recognised. There is no eject, no delete.
 
-It binds to `127.0.0.1` by default. It serves multi-gigabyte files and has no
-authentication, so only expose it on a network you trust. `WEB_UI=0` disables
-it entirely.
+`WEB_UI=0` disables it entirely.
+
+### Reaching it from other machines
+
+It binds to `127.0.0.1` by default, so only the host can see it. To open it to
+your LAN, create a `.env` file next to `docker-compose.yml`:
+
+```ini
+WEB_BIND=0.0.0.0
+```
+
+then `docker compose up -d --force-recreate`. It's now at
+`http://<host-lan-ip>:8080` from any device on the network — phone included,
+which is the point.
+
+On **Windows** you also need a firewall rule, once:
+
+```powershell
+New-NetFirewallRule -DisplayName "ISOHungry web UI" -Direction Inbound `
+  -LocalPort 8080 -Protocol TCP -Action Allow -Profile Private
+```
+
+Note `-Profile Private`. If your network is classified Public, either change
+the network to Private or add `Public` here — but understand what that means
+before you do it on a network you don't control.
+
+**Know what you're exposing.** There is no authentication and no TLS. Anyone
+who can reach the port can browse your library, download whole ISOs, and
+rename things. That's fine on a home LAN and a bad idea anywhere else.
+
+### Better: a private network instead of a firewall hole
+
+If you run **Tailscale** (or another WAN), bind to its interface rather than
+opening a LAN port. You get device-authenticated access from anywhere, no
+firewall rule, and nothing exposed to other machines on the local network:
+
+```ini
+# .env — substitute your own tailnet address
+WEB_BIND=100.x.y.z
+```
+
+Then reach it at `http://100.x.y.z:8080` from any device on your tailnet.
+`tailscale ip -4` prints the address.
+
+Or tunnel over SSH and skip network exposure altogether:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 you@host    # then use http://localhost:8080
+```
 
 ---
 
@@ -130,15 +176,20 @@ it entirely.
 | Status | Meaning |
 |---|---|
 | 🍪 `Me hungry... feed me disc!` | Drive empty, waiting |
-| 🍪 `NOM NOM NOM! Eating X` | Ripping the disc |
+| 🍪 `NOM NOM NOM! Eating X` | Ripping a video DVD |
+| 🎵 `NOM NOM! Slurping X` | Ripping and encoding an audio CD |
+| 🍪 `NOM NOM! Eating data X` | Imaging a data disc |
 | 😋 `Om nom nom... chewing into ISO` | Building the ISO |
 | 🤤 `BUUURP! Me ate X` | Done |
 | 💨 `BURP! Spit out X` | Ejected, ready for the next |
 | 🙃 `Me already ate dis! (X)` | Seen before, ejected untouched |
 | 😋 `Me full! Waiting (2/2 eating)` | At `MAX_PARALLEL`, queued |
 | 😢 `Tummy full! Need NNNMB` | Not enough disk space; waits |
-| 🤮 `Me no like dis disc!` | Rip failed — check `out/logs/` |
-| 😝 `Dis not movie!` | No `VIDEO_TS`; not a video DVD |
+| 🙅 `Me no eat data discs` | A data disc, and `RIP_DATA_DISCS=0` |
+| 🤮 `Me no like dis disc!` | Video/data rip failed — check `out/logs/` |
+| 🤮 `Me no like dis CD!` | Audio rip failed — check `out/logs/` |
+| 😝 `Dis not movie!` | Claimed to have `VIDEO_TS`, but the extract had none |
+| 😝 `No music came out!` | Audio CD produced no encoded tracks |
 | 😤 `Disc stuck in me teeth!` | Eject failed, pull it out yourself |
 | 😵 `Drive no talk to me!` | Drive stopped responding |
 
@@ -197,10 +248,20 @@ socket dies with the container, leaving the device present but wedged in
 **No drives listed** — on Windows, did you run `attach-drives.ps1`? Check with
 `docker run --rm --privileged -v /dev:/dev alpine ls /dev/sr0`.
 
-**`🤮 Me no like dis disc!`** — usually a scratched or unusually protected
-disc. The real error is in `out/logs/<device>.log`.
+**`🤮 Me no like dis disc!` / `Me no like dis CD!`** — usually a scratched or
+unusually protected disc. The real error is in `out/logs/<device>.log`.
 
-**`😝 Dis not movie!`** — the disc has no `VIDEO_TS`. Data DVDs aren't handled.
+**`😝 Dis not movie!`** — the disc's index advertised a `VIDEO_TS` directory,
+but the extraction produced none. That means a failed or partial `dvdbackup`
+run, not a data disc: discs without `VIDEO_TS` are detected up front and
+imaged into `out/data/` instead. Check the log.
+
+**`😝 No music came out!`** — `abcde` finished but wrote no tracks. Usually a
+MusicBrainz lookup that failed alongside a read error; the log has both.
+
+**Music has no artist or album name** — MusicBrainz had no match for that
+disc, so `abcde` fell back to placeholder names. Rename it from the web UI, or
+name it while it rips.
 
 **`😵 Drive no talk to me!`** — the drive stopped responding. On Windows this
 usually means the usbip attachment dropped; re-run `attach-drives.ps1`.
