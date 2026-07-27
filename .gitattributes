@@ -1,6 +1,7 @@
 # Shell scripts and container files MUST stay LF. A CRLF checkout on Windows
 # produces `#!/bin/bash\r`, which fails as "bad interpreter: /bin/bash^M".
 *.sh            text eol=lf
+*.py            text eol=lf
 Dockerfile      text eol=lf
 *.yml           text eol=lf
 *.yaml          text eol=lf
