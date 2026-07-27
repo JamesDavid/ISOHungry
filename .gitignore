@@ -1,0 +1,17 @@
+# Ripped discs and everything the ripper writes at runtime
+out/
+*.iso
+*.iso.partial
+
+# Built kernel artifacts (rebuild with scripts/setup-windows.ps1)
+wsl-kernel/
+bzImage
+kernel-config
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

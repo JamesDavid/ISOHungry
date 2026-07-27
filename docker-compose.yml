@@ -1,0 +1,27 @@
+services:
+  dvd-backup:
+    build: .
+    image: auto-dvd-backup:latest
+    container_name: auto-dvd-backup
+
+    # Needed to open raw optical block devices and issue the SCSI eject ioctl.
+    privileged: true
+
+    # Bind the whole /dev tree so EVERY drive that appears (/dev/sr0, sr1, ...)
+    # is picked up automatically, including ones hot-plugged after start.
+    # A static `devices:` list would only expose drives present at container start.
+    volumes:
+      - /dev:/dev
+      - ./out:/output
+
+    environment:
+      BASE_OUTPUT_DIR: /output
+      POLL_INTERVAL: 5
+      # Raise if your drives are on separate USB controllers; lower if rips
+      # slow each other down on a shared hub.
+      MAX_PARALLEL: 2
+      TZ: America/New_York
+
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

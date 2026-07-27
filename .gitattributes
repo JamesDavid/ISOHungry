@@ -1,0 +1,14 @@
+# Shell scripts and container files MUST stay LF. A CRLF checkout on Windows
+# produces `#!/bin/bash\r`, which fails as "bad interpreter: /bin/bash^M".
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# PowerShell is native to Windows; CRLF is correct there.
+*.ps1           text eol=crlf
+
+*.md            text
+*.iso           binary
