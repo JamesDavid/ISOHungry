@@ -7,16 +7,23 @@
 #                                    |___/      |___/
 # ME EAT DVD. ME MAKE ISO. OM NOM NOM.
 #
-# Watches every optical drive, devours each disc into an ISO, burps, ejects,
-# and waits for the next one. Several drives at once, bounded by MAX_PARALLEL.
+# Watches every optical drive, works out what each disc is, and rips it:
+# films to ISO, audio CDs to tagged MP3/FLAC, data discs to images. Burps,
+# ejects, waits for the next one. Several drives at once, bounded by
+# MAX_PARALLEL.
 #
 # Config (all optional, read from the environment):
-#   BASE_OUTPUT_DIR  where ISOs are written        (default ~/Videos/DVDs)
-#   POLL_INTERVAL    seconds between drive scans   (default 5)
-#   MAX_PARALLEL     concurrent rips               (default 2)
-#   SPACE_FACTOR     free space required, in tenths of disc size (default 22 = 2.2x)
-#   PROBE_TIMEOUT    seconds before a wedged drive is given up on (default 30)
-#   GENERIC_LABELS   labels too common to trust as filenames; these get a timestamp
+#   BASE_OUTPUT_DIR        where output is written   (default ~/Videos/DVDs)
+#   POLL_INTERVAL          seconds between drive scans           (default 5)
+#   MAX_PARALLEL           concurrent rips                       (default 2)
+#   SPACE_FACTOR           free space required, in tenths of disc size (22 = 2.2x)
+#   PROBE_TIMEOUT          seconds before a wedged drive is given up on (30)
+#   GENERIC_LABELS         labels too common to trust as filenames; get a timestamp
+#   AUDIO_FORMAT           mp3 or flac                           (default mp3)
+#   AUDIO_RIP_TIMEOUT      seconds before an audio rip gives up  (default 5400)
+#   AUDIO_CDPARANOIA_OPTS  extra cdparanoia flags; -Y or -Z for damaged discs
+#   RIP_DATA_DISCS         0 to ignore non-video, non-audio discs (default 1)
+#   DEVICE_GLOB            which devices to watch          (default /dev/sr*)
 
 set -uo pipefail
 shopt -s extglob nullglob

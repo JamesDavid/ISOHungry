@@ -60,7 +60,8 @@ out/
 ├── movies/   THE_MATRIX.iso, THE_MATRIX_disc2.iso, …
 ├── music/    Radiohead/OK Computer/01 - Airbag.mp3, …
 ├── data/     BACKUP_2019.iso, …
-└── logs/     sr0.log, sr1.log, …
+├── logs/     sr0.log, sr1.log, …
+└── .ripped/  one marker per disc already eaten
 ```
 
 ---
@@ -99,8 +100,22 @@ Discs are identified automatically and sorted into subdirectories.
 
 Audio is checked first, so an *enhanced CD* (audio tracks plus a data session)
 is ripped as music rather than as a data image. Music lands as
-`music/Artist/Album/01 - Track.mp3`, tagged from MusicBrainz; set
-`AUDIO_FORMAT=flac` for lossless. `RIP_DATA_DISCS=0` ignores data discs.
+`music/Artist/Album/01 - Track.mp3`; set `AUDIO_FORMAT=flac` for lossless, and
+`RIP_DATA_DISCS=0` to ignore data discs.
+
+While an audio CD rips, the display shows the album as soon as the lookup
+resolves and then follows the track count — `Track 3/12: Artist / Album`.
+
+**Tags are written by ISOHungry, not by abcde.** abcde's own tagging step
+reports success while leaving the files untagged: it sends the tagger's output
+to `/dev/null` and only checks the exit status, and the tagger exits 0 having
+done nothing. So the files are tagged afterwards from the CDDB data abcde
+fetched, which also carries properly spaced titles where the filenames have
+had spaces munged to underscores. Various-artists discs get the right
+per-track artist.
+
+If a disc won't give up every track, the readable ones are still kept and
+`UNREADABLE_TRACKS.txt` in the album folder records what's missing.
 
 ## How things get named
 
@@ -202,17 +217,22 @@ ssh -L 8080:127.0.0.1:8080 you@host    # then use http://localhost:8080
 |---|---|
 | 🍪 `Me hungry... feed me disc!` | Drive empty, waiting |
 | 🍪 `NOM NOM NOM! Eating X` | Ripping a video DVD |
-| 🎵 `NOM NOM! Slurping X` | Ripping and encoding an audio CD |
+| 🎵 `NOM NOM! Slurping X` | Ripping an audio CD, before it's identified |
+| 🎵 `NOM NOM! Artist / Album` | The disc has been identified |
+| 🎵 `Track 3/12: Artist / Album` | Ripping that track |
+| 🎵 `No match — slurping untagged` | No metadata found; ripping anyway |
 | 🍪 `NOM NOM! Eating data X` | Imaging a data disc |
 | 😋 `Om nom nom... chewing into ISO` | Building the ISO |
 | 🤤 `BUUURP! Me ate X` | Done |
 | 💨 `BURP! Spit out X` | Ejected, ready for the next |
+| 🤕 `Ate 13/14 — track 1 no good` | Some tracks were unreadable; the rest were kept |
 | 🙃 `Me already ate dis! (X)` | Seen before, ejected untouched |
 | 😋 `Me full! Waiting (2/2 eating)` | At `MAX_PARALLEL`, queued |
 | 😢 `Tummy full! Need NNNMB` | Not enough disk space; waits |
 | 🙅 `Me no eat data discs` | A data disc, and `RIP_DATA_DISCS=0` |
 | 🤮 `Me no like dis disc!` | Video/data rip failed — check `out/logs/` |
 | 🤮 `Me no like dis CD!` | Audio rip failed — check `out/logs/` |
+| 🤮 `Me choke on dis!` | ISO build failed — check `out/logs/` |
 | 😝 `Dis not movie!` | Claimed to have `VIDEO_TS`, but the extract had none |
 | 😝 `No music came out!` | Audio CD produced no encoded tracks |
 | 😤 `Disc stuck in me teeth!` | Eject failed, pull it out yourself |
@@ -360,6 +380,7 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 | `setup.sh` | Linux/macOS setup |
 | `scripts/setup-windows.ps1` | Windows one-time setup |
 | `scripts/attach-drives.ps1` | Per-boot USB attach/detach |
+| `scripts/retag-music.sh` | Retro-tags albums ripped before tagging worked |
 | `kernel/build-wsl-kernel.sh` | Reproducible WSL2 kernel build |
 
 Commercial DVDs are CSS-scrambled; libdvdcss is built from VideoLAN source in
