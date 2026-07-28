@@ -505,31 +505,56 @@ EOF
 
   tag_album "$scratch" "$album_src" "$logfile"
 
-  # Which tracks did the disc refuse to give up? Record them next to the music
-  # rather than leaving a silently short album.
-  local got missing n
+  # Which tracks are missing, and — importantly — why. A rip cut short by the
+  # drive being detached or the container restarting is NOT a damaged disc, and
+  # saying so sends people off cleaning discs that were never the problem.
+  local got missing n read_errors reason
   got=$(find "$album_src" -maxdepth 1 -type f -name "*.$AUDIO_FORMAT" | wc -l)
   missing=""
   if (( tracks > 0 )) && (( got < tracks )); then
     for (( n = 1; n <= tracks; n++ )); do
-      find "$album_src" -maxdepth 1 -name "$(printf '%02d' "$n") - *" -print -quit 2>/dev/null \
-        | grep -q . || missing+="${missing:+, }$n"
+      [ -n "$(find "$album_src" -maxdepth 1 -name "$(printf '%02d' "$n") - *" -print -quit 2>/dev/null)" ] \
+        || missing+="${missing:+, }$n"
     done
+
+    # Did this rip actually hit read errors? Only then is the disc to blame.
+    read_errors=$(tail -c "+$((log_offset + 1))" "$logfile" 2>/dev/null \
+                  | grep -cE 'scsi_read error|read errors total')
+    [[ "$read_errors" =~ ^[0-9]+$ ]] || read_errors=0
+
+    if (( read_errors > 0 ));   then reason="unreadable"
+    elif [ ! -b "$device" ];    then reason="drive disappeared"
+    elif (( rc == 124 ));       then reason="timed out"
+    else                             reason="interrupted"
+    fi
+
     {
-      echo "Some tracks could not be read from this disc."
+      if [ "$reason" = unreadable ]; then
+        echo "Some tracks could not be read from this disc."
+      else
+        echo "This rip did not finish: $reason."
+      fi
       echo
       echo "missing tracks : ${missing:-unknown}"
       echo "got            : $got of $tracks"
+      echo "reason         : $reason"
       echo "device         : $device"
       echo "when           : $(date -Is)"
       echo
-      echo "Usually a scratch or a failing drive. The read errors are in"
-      echo "logs/$dev_name.log. To try again, delete the marker for this disc"
-      echo "in .ripped/ and reinsert it - ideally in a different drive, or with"
-      echo "AUDIO_CDPARANOIA_OPTS=-Z to push past the damage at some cost to"
-      echo "accuracy."
+      if [ "$reason" = unreadable ]; then
+        echo "Usually a scratch or a failing drive. The read errors are in"
+        echo "logs/$dev_name.log. Try another drive, or set"
+        echo "AUDIO_CDPARANOIA_OPTS=-Z to push past the damage at some cost"
+        echo "to accuracy."
+      else
+        echo "The disc is probably fine - the rip was cut short (drive"
+        echo "detached, container restarted, or the time limit reached)."
+      fi
+      echo
+      echo "This disc was NOT recorded as ripped, so reinserting it will"
+      echo "simply start again."
     } > "$album_src/UNREADABLE_TRACKS.txt"
-    echo "!!! unreadable tracks: $missing (got $got of $tracks)" >> "$logfile"
+    echo "!!! incomplete ($reason): missing $missing (got $got of $tracks)" >> "$logfile"
   fi
 
   album_rel=${album_src#"$scratch/out/"}
@@ -547,7 +572,14 @@ EOF
   mv -f "$album_src" "$target"
   sync
 
-  printf '%s\n' "music/${target#"$MUSIC_DIR/"}" > "$FP_DIR/$fp"
+  # Only record the disc as eaten if we actually got all of it. An incomplete
+  # album marked "done" is worse than no marker: reinserting the disc would be
+  # answered with "me already ate dis" and you'd never get the missing tracks.
+  if [ -z "$missing" ]; then
+    printf '%s\n' "music/${target#"$MUSIC_DIR/"}" > "$FP_DIR/$fp"
+  else
+    echo "=== not recording as ripped; reinsert to retry the missing tracks" >> "$logfile"
+  fi
   echo "=== done $(date -Is) -> $target" >> "$logfile"
 
   rm -rf "$scratch"
