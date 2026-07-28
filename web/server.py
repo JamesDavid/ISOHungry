@@ -13,6 +13,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
@@ -173,13 +175,20 @@ def collect_isos():
             size += st.st_size
             newest = max(newest, int(st.st_mtime))
         rel = os.path.relpath(root, OUTPUT_DIR).replace(os.sep, "/")
+        name = os.path.relpath(root, music).replace(os.sep, "/")
+        # A disc missing from the lookup database lands as "Unknown Artist /
+        # Unknown Album" with "Track 1..N". Flag those so they can be
+        # identified from the UI instead of sitting there unnoticed.
+        needs_id = ("unknown" in name.lower()
+                    or any(re.match(r"^\d+ - Track[ _]?\d+\.", t) for t in tracks))
         out.append({
-            "name": os.path.relpath(root, music).replace(os.sep, "/"),
+            "name": name,
             "rel": rel,
             "kind": "music",
             "size": size,
             "mtime": newest,
             "tracks": len(tracks),
+            "needs_id": needs_id,
         })
 
     out.sort(key=lambda i: i["mtime"], reverse=True)
@@ -341,6 +350,30 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, {"error": "not found"})
 
+    # Identify an album the disc lookup missed, by searching MusicBrainz by
+    # name. Reaches outward, so it gets a longer leash than the local calls.
+    def _identify(self, payload):
+        target = self._resolve(payload.get("rel"), want="album")
+        if not target:
+            self._send(404, {"error": "no such album"})
+            return
+        cmd = [sys.executable, os.path.join(HERE, "identify-album.py"),
+               "--dir", target, "--json"]
+        q = (payload.get("query") or "").strip()
+        if q:
+            cmd += ["--query", q[:200]]
+        if payload.get("apply"):
+            cmd += ["--apply", "--pick", str(int(payload.get("pick") or 0))]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            self._send(504, {"error": "MusicBrainz took too long"})
+            return
+        try:
+            self._send(200, json.loads(p.stdout or "{}"))
+        except ValueError:
+            self._send(500, {"error": (p.stderr or "lookup failed").strip()[:300]})
+
     # ----------------------------------------------------------------- POST
     def _do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -373,6 +406,10 @@ class Handler(BaseHTTPRequestHandler):
             elif os.path.exists(target):
                 os.remove(target)          # empty name clears it
             self._send(200, {"ok": True, "fp": fp, "name": name})
+            return
+
+        if path == "/api/identify":
+            self._identify(payload)
             return
 
         # Rename a finished ISO, keeping its fingerprint marker in step so the

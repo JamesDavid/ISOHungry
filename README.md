@@ -154,10 +154,15 @@ and data images, **tracks for audio CDs**. Encoded audio is a small fraction of
 the raw disc, so measuring bytes against CD size would show a finished album
 sitting at about 10%.
 
-Two things it can change, and nothing else: **name a rip while it's running**
-(applied when the ISO is finalised, so you can type the real film title while
-the disc spins) and **rename a finished item**, which keeps its fingerprint
-marker in step so the disc stays recognised. There is no eject, no delete.
+Three things it can change, and nothing else. **Name a rip while it's running**
+— applied when the ISO is finalised, so you can type the real film title while
+the disc spins. **Rename a finished item**, keeping its fingerprint marker in
+step so the disc stays recognised. And **identify an album** the disc lookup
+missed: anything that landed as `Unknown Artist` or `Track 1..N` is marked
+**not identified**, and the Identify button searches MusicBrainz by name,
+shows the candidates with a `*` beside those whose track count agrees, then
+tags, renames and files the album under `Artist/Album`. There is no eject and
+no delete.
 
 `WEB_UI=0` disables it entirely.
 
@@ -315,6 +320,9 @@ MusicBrainz lookup that failed alongside a read error; the log has both.
 a disc that isn't in the database becomes `Unknown Artist / Unknown Album` with
 `Track 1..N`. You don't need the disc back to fix it: search MusicBrainz by
 name instead and match on track count.
+
+Easiest from the **web UI** — such albums are badged *not identified* and have
+an Identify button. From the command line:
 
 ```bash
 docker exec isohungry python3 /opt/isohungry/identify-album.py \

@@ -82,6 +82,86 @@ def release_tracks(mbid):
     return albumartist, album, year, out
 
 
+def apply_release(d, files, chosen_id, no_move):
+    """Tag, rename and (optionally) reorganise. Returns the final directory."""
+    albumartist, album, year, tracks = release_tracks(chosen_id)
+    by_num = {t["num"]: t for t in tracks}
+
+    plan = []
+    for f in files:
+        m = re.match(r"^(\d+)", f)
+        if not m:
+            continue
+        n = int(m.group(1))
+        t = by_num.get(n)
+        if t:
+            plan.append((f, n, t["artist"], t["title"]))
+
+    total = len(plan)
+    for old, n, artist, title in plan:
+        src = os.path.join(d, old)
+        if src.lower().endswith(".mp3"):
+            subprocess.run(["eyeD3", "--encoding", "utf8", "-a", artist, "-A", album,
+                            "-t", title, "-n", str(n), "-N", str(total)]
+                           + (["-Y", year] if year else []) + [src],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        elif src.lower().endswith(".flac"):
+            subprocess.run(["metaflac", "--remove-tag=ARTIST", "--remove-tag=ALBUM",
+                            "--remove-tag=TITLE", "--remove-tag=TRACKNUMBER", src], check=False)
+            subprocess.run(["metaflac", "--set-tag=ARTIST=" + artist,
+                            "--set-tag=ALBUM=" + album, "--set-tag=TITLE=" + title,
+                            "--set-tag=TRACKNUMBER=" + str(n), src], check=False)
+        dst = os.path.join(d, "%02d - %s%s" % (n, munge(title), os.path.splitext(old)[1]))
+        if dst != src and not os.path.exists(dst):
+            os.rename(src, dst)
+
+    final = d
+    if not no_move:
+        music_root = os.path.dirname(os.path.dirname(d))
+        target = os.path.join(music_root, munge(albumartist), munge(album))
+        if os.path.abspath(target) != d and not os.path.exists(target):
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.rename(d, target)
+            final = target
+            try:
+                os.rmdir(os.path.dirname(d))
+            except OSError:
+                pass
+    return final, albumartist, album, year, total
+
+
+def main_json(args):
+    """Used by the web UI: candidates, or the result of applying one."""
+    d = os.path.abspath(args.dir)
+    if not os.path.isdir(d):
+        print(json.dumps({"error": "not a directory"})); return
+    files = tracks_in(d)
+    if not files:
+        print(json.dumps({"error": "no audio files"})); return
+
+    query = args.query or os.path.basename(d).replace("_", " ")
+    try:
+        matches = search_releases(query, len(files))
+    except Exception as e:
+        print(json.dumps({"error": "MusicBrainz lookup failed: %s" % e})); return
+    if not matches:
+        print(json.dumps({"error": "no matches for %r" % query, "query": query})); return
+
+    if not args.apply:
+        print(json.dumps({"query": query, "files": len(files),
+                          "matches": matches[:10]}))
+        return
+
+    chosen = matches[args.pick]
+    time.sleep(1.1)
+    try:
+        final, artist, album, year, n = apply_release(d, files, chosen["id"], args.no_move)
+    except Exception as e:
+        print(json.dumps({"error": "apply failed: %s" % e})); return
+    print(json.dumps({"ok": True, "artist": artist, "album": album,
+                      "year": year, "tracks": n, "dir": final}))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="album directory to identify")
@@ -90,7 +170,12 @@ def main():
     ap.add_argument("--apply", action="store_true", help="write tags and rename")
     ap.add_argument("--no-move", action="store_true",
                     help="tag in place; don't reorganise into Artist/Album")
+    ap.add_argument("--json", action="store_true",
+                    help="machine-readable output, for the web UI")
     args = ap.parse_args()
+
+    if args.json:
+        return main_json(args)
 
     d = os.path.abspath(args.dir)
     if not os.path.isdir(d):

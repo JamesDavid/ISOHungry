@@ -65,6 +65,11 @@
     .iso .time { margin-right:0; }
   }
   .empty { color:var(--dim); font-style:italic; }
+  .badge {
+    display:inline-block; margin-left:.4rem; padding:.05rem .4rem; border-radius:4px;
+    background:var(--bad); color:#fff; font-size:.68rem; font-weight:700;
+    vertical-align:middle; white-space:nowrap;
+  }
   .toast {
     position:fixed; left:50%; bottom:1.5rem; transform:translateX(-50%);
     background:var(--cookie); color:#1b1410; padding:.6rem 1.1rem;
@@ -192,8 +197,10 @@ function drawIsos(isos) {
   const icon = {movies:'🎬', music:'🎵', data:'💾'};
   box.innerHTML = isos.map(i => `
     <div class="card iso">
-      <span class="nm">${icon[i.kind]||'💿'} ${esc(i.name)}</span>
+      <span class="nm">${icon[i.kind]||'💿'} ${esc(i.name)}
+        ${i.needs_id ? '<span class="badge">not identified</span>' : ''}</span>
       <span class="time">${gb(i.size)}${i.tracks ? ' · '+i.tracks+' tracks' : ''}</span>
+      ${i.needs_id ? `<button onclick="identify('${esc(i.rel)}','${esc(i.name)}')">Identify</button>` : ''}
       <button class="ghost" onclick="rename('${esc(i.rel)}','${esc(i.name)}')">Rename</button>
       ${i.kind === 'music' ? ''
         : `<a class="dl" href="/download/${i.rel.split('/').map(encodeURIComponent).join('/')}">↓</a>`}
@@ -210,6 +217,35 @@ async function setName(fp, inputId) {
   const r = await post('/api/pending', {fp, name: el.value});
   if (r) toast(r.name ? 'will save as ' + r.name + '.iso' : 'name cleared');
   editing = null; refresh();
+}
+
+async function identify(rel, shown) {
+  const suggested = shown.split('/').pop().replace(/_/g, ' ');
+  const q = prompt('Search MusicBrainz for:\n(artist and album works best)', suggested);
+  if (q === null) return;
+
+  toast('searching…');
+  const r = await post('/api/identify', {rel, query: q});
+  if (!r) return;
+  if (r.error) { toast(r.error); return; }
+  if (!r.matches || !r.matches.length) { toast('no matches'); return; }
+
+  // * marks releases whose track count agrees with what's on disk — the
+  // strongest signal that it's the right release.
+  const list = r.matches.map((m, n) =>
+    `${m.count === r.files ? '*' : ' '}${n}  ${m.artist} — ${m.title}` +
+    `${m.date ? ' ('+m.date+')' : ''}  ${m.count} tracks`).join('\n');
+  const pick = prompt(
+    `${r.files} files on disk. * = track count agrees.\n\n${list}\n\n` +
+    `Enter a number to apply, or Cancel:`, '0');
+  if (pick === null) return;
+
+  toast('applying…');
+  const a = await post('/api/identify', {rel, query: q, apply: true, pick: parseInt(pick, 10) || 0});
+  if (!a) return;
+  if (a.error) { toast(a.error); return; }
+  toast(`tagged ${a.tracks} tracks: ${a.artist} — ${a.album}`);
+  refresh();
 }
 
 async function rename(rel, shown) {
