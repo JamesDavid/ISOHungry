@@ -256,6 +256,23 @@ render_status() {
 
 # --------------------------------------------------------------------- rip
 
+# A damaged disc makes cdparanoia emit read errors by the thousand per second:
+# one scratched CD produced a 110 MB log in minutes, and left long enough it
+# would fill the output volume. Keep the first few so the cause is visible,
+# then count the rest and report periodically.
+filter_read_errors() {
+  awk '
+    /scsi_read error|Sense key:|Transport error|System error|Unable to read/ {
+      n++
+      if (n <= 40) { print; next }
+      if (n % 20000 == 0) printf("... %d read errors so far (suppressed)\n", n)
+      next
+    }
+    { print }
+    END { if (n > 40) printf("=== %d read errors total, %d suppressed\n", n, n - 40) }
+  '
+}
+
 # Structured detail for the web UI. The TUI reads STATUS_DIR only, so this is
 # purely additive — nothing here changes what the terminal shows.
 write_meta() {
@@ -443,8 +460,8 @@ EOF
   (( AUDIO_RIP_TIMEOUT > 0 )) && tmo=(timeout "$AUDIO_RIP_TIMEOUT")
 
   ( cd "$scratch/wrk" && HOME="$scratch" "${tmo[@]}" abcde -N -d "$device" -c "$conf" ) \
-    >> "$logfile" 2>&1
-  rc=$?
+    2>&1 | filter_read_errors >> "$logfile"
+  rc=${PIPESTATUS[0]}
   (( rc == 124 )) && echo "!!! rip hit AUDIO_RIP_TIMEOUT (${AUDIO_RIP_TIMEOUT}s)" >> "$logfile"
 
   # Anything encoded is worth keeping, even if the run as a whole failed: a
@@ -458,7 +475,7 @@ EOF
     mkdir -p "$scratch/wrk"
     sed 's/^ACTIONS=.*/ACTIONS=read,encode,tag,move/' "$conf" > "$conf.nolookup"
     ( cd "$scratch/wrk" && HOME="$scratch" "${tmo[@]}" abcde -N -d "$device" -c "$conf.nolookup" ) \
-      >> "$logfile" 2>&1
+      2>&1 | filter_read_errors >> "$logfile"
     if [ -z "$(find "$scratch/out" -name "*.$AUDIO_FORMAT" -print -quit 2>/dev/null)" ]; then
       set_status "$dev_name" "🤮 Me no like dis CD! see logs/$dev_name.log" "$start"
       echo "!!! abcde produced nothing, with and without metadata" >> "$logfile"
@@ -620,7 +637,8 @@ rip_disc() {
   mkdir -p "$scratch"
 
   set_status "$dev_name" "🍪 NOM NOM NOM! Eating $label" "$start"
-  if ! dvdbackup -M -i "$device" -o "$scratch" >> "$logfile" 2>&1; then
+  dvdbackup -M -i "$device" -o "$scratch" 2>&1 | filter_read_errors >> "$logfile"
+  if (( ${PIPESTATUS[0]} != 0 )); then
     set_status "$dev_name" "🤮 Me no like dis disc! see logs/$dev_name.log" "$start"
     echo "!!! dvdbackup failed" >> "$logfile"
     rm -rf "$scratch"; rm -f "$LOCK_DIR/$dev_name"

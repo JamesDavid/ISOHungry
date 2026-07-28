@@ -311,9 +311,22 @@ imaged into `out/data/` instead. Check the log.
 **`😝 No music came out!`** — `abcde` finished but wrote no tracks. Usually a
 MusicBrainz lookup that failed alongside a read error; the log has both.
 
-**Music has no artist or album name** — MusicBrainz had no match for that
-disc, so `abcde` fell back to placeholder names. Rename it from the web UI, or
-name it while it rips.
+**Music has no artist or album name** — lookup at rip time is by disc TOC, so
+a disc that isn't in the database becomes `Unknown Artist / Unknown Album` with
+`Track 1..N`. You don't need the disc back to fix it: search MusicBrainz by
+name instead and match on track count.
+
+```bash
+docker exec isohungry python3 /opt/isohungry/identify-album.py \
+  --dir "/output/music/Unknown_Artist/Some_Album"            # dry run
+docker exec isohungry python3 /opt/isohungry/identify-album.py \
+  --dir "/output/music/Unknown_Artist/Some_Album" --apply
+```
+
+It lists candidate releases, marking those whose track count agrees, tags the
+files, renames them to the real titles, and moves the album to
+`Artist/Album`. Use `--query` if the folder name isn't a good search term,
+`--pick N` to choose a different match, and `--no-move` to tag in place.
 
 **`🤕 Ate 13/14 — track 1 no good`** — the disc wouldn't give up every track.
 What was readable is kept, and `UNREADABLE_TRACKS.txt` in the album folder
@@ -350,6 +363,17 @@ Dismount-DiskImage -ImagePath C:\path\to\out\movies\YOUR.iso
 **`😵 Drive no talk to me!`** — the drive stopped responding. On Windows this
 usually means the usbip attachment dropped; re-run `attach-drives.ps1`.
 
+**A drive disappears from the display** — a badly damaged disc can knock a USB
+drive off the bus entirely; `usbipd list` still shows it Attached but the
+device behind it is gone. Detach and re-attach it:
+
+```powershell
+usbipd detach --busid <id>
+.\scripts\attach-drives.ps1
+```
+
+The drive reappears within one scan cycle.
+
 **Rips are slow** — USB optical drives read at 2–10 MB/s, so a full disc takes
 20–60 minutes. That's the drive, not the software.
 
@@ -381,6 +405,7 @@ Delete the `kernel=` line from `%USERPROFILE%\.wslconfig` and run
 | `scripts/setup-windows.ps1` | Windows one-time setup |
 | `scripts/attach-drives.ps1` | Per-boot USB attach/detach |
 | `scripts/retag-music.sh` | Retro-tags albums ripped before tagging worked |
+| `scripts/identify-album.py` | Identifies an album MusicBrainz missed at rip time |
 | `kernel/build-wsl-kernel.sh` | Reproducible WSL2 kernel build |
 
 Commercial DVDs are CSS-scrambled; libdvdcss is built from VideoLAN source in
