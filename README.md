@@ -16,8 +16,9 @@ sr2   | 🤤 BUUURP! Me ate THE_MATRIX     | 00:44:52
 sr3   | 🍪 Me hungry... feed me disc!    | --:--:--
 ```
 
-There's a web UI too, on `:8080` — same information, plus a log viewer, and
-you can name a disc while it's still ripping.
+There's a web UI too, on `:8080` — the same information plus a log viewer, a
+settings panel, and the ability to name a disc while it's still ripping or
+identify an album the lookup missed.
 
 <p align="center">
   <picture>
@@ -100,8 +101,9 @@ Discs are identified automatically and sorted into subdirectories.
 
 Audio is checked first, so an *enhanced CD* (audio tracks plus a data session)
 is ripped as music rather than as a data image. Music lands as
-`music/Artist/Album/01 - Track.mp3`; set `AUDIO_FORMAT=flac` for lossless, and
-`RIP_DATA_DISCS=0` to ignore data discs.
+`music/Artist/Album/01 - Track.mp3`. Choose FLAC instead of MP3, or turn data
+discs off, from the web UI's Settings panel — or with `AUDIO_FORMAT` and
+`RIP_DATA_DISCS` if you'd rather set them in `docker-compose.yml`.
 
 While an audio CD rips, the display shows the album as soon as the lookup
 resolves and then follows the track count — `Track 3/12: Artist / Album`.
