@@ -151,13 +151,27 @@ foreach ($t in $targets) {
   }
 }
 
-Start-Sleep -Seconds 3
-
 # --- verify -----------------------------------------------------------------
+# USB enumeration after an attach is not instant, and is slower when a drive
+# has just been reset. Poll rather than checking once: a premature failure here
+# used to send people off to rebuild their kernel for no reason.
 Info "`nVerifying"
-$devs = docker run --rm --privileged -v /dev:/dev --entrypoint sh $image -c "ls /dev/sr* 2>/dev/null"
+$devs = ''
+$deadline = (Get-Date).AddSeconds(45)
+while ((Get-Date) -lt $deadline) {
+  $devs = docker run --rm --privileged -v /dev:/dev --entrypoint sh $image -c "ls /dev/sr* 2>/dev/null"
+  if (-not [string]::IsNullOrWhiteSpace($devs)) { break }
+  Write-Host "  waiting for the kernel to enumerate..." -ForegroundColor DarkGray
+  Start-Sleep -Seconds 5
+}
 if ([string]::IsNullOrWhiteSpace($devs)) {
-  Die "No /dev/sr* appeared. Is the custom kernel active? Re-run scripts\setup-windows.ps1."
+  Die @"
+No /dev/sr* appeared after 45s.
+  - if this worked before, the USB stack may be wedged: 'wsl --shutdown',
+    restart Docker Desktop, then re-run this script
+  - if it has never worked, the custom kernel may not be active:
+    docker run --rm --privileged alpine uname -r     # should end in '+'
+"@
 }
 foreach ($d in ($devs -split "`n" | Where-Object { $_ -match '\S' })) { Ok $d.Trim() }
 
