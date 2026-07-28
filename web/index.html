@@ -65,6 +65,18 @@
     .iso .time { margin-right:0; }
   }
   .empty { color:var(--dim); font-style:italic; }
+  .setting {
+    display:flex; align-items:center; gap:.8rem; flex-wrap:wrap;
+    padding:.45rem 0; border-bottom:1px solid var(--edge);
+  }
+  .setting:last-of-type { border-bottom:0; }
+  .setting label { flex:1 1 11rem; display:flex; flex-direction:column; }
+  .setting label em { color:var(--dim); font-size:.75rem; font-style:normal; }
+  .setting select {
+    flex:1 1 13rem; background:var(--bg); color:var(--ink); font:inherit;
+    font-size:.85rem; border:1px solid var(--edge); border-radius:6px; padding:.35rem .5rem;
+  }
+  .setting select:focus { outline:2px solid var(--cookie); outline-offset:-1px; }
   .badge {
     display:inline-block; margin-left:.4rem; padding:.05rem .4rem; border-radius:4px;
     background:var(--bad); color:#fff; font-size:.68rem; font-weight:700;
@@ -99,6 +111,9 @@
 
   <h2>Recently eaten</h2>
   <div id="isos"><div class="card empty">nothing yet</div></div>
+
+  <h2>Settings</h2>
+  <div id="settings"><div class="card empty">loading…</div></div>
 
   <h2>Logs</h2>
   <div id="logs"><div class="card empty">no logs yet</div></div>
@@ -256,6 +271,47 @@ async function rename(rel, shown) {
   if (r) { toast('renamed to ' + r.name); refresh(); }
 }
 
+const SETTINGS = [
+  {key:'AUDIO_FORMAT', label:'Music format', hint:'FLAC is lossless and roughly 4x larger',
+   opts:[['mp3','MP3 (LAME -V0, ~245kbps)'],['flac','FLAC (lossless)']]},
+  {key:'RIP_DATA_DISCS', label:'Data discs', hint:'Non-video, non-audio discs',
+   opts:[['1','Rip to an ISO image'],['0','Ignore them']]},
+  {key:'AUDIO_CDPARANOIA_OPTS', label:'CD read care', hint:'Lower care gets past scratches, less accurately',
+   opts:[['','Full paranoia (best quality)'],['-Y','Less paranoid (faster)'],['-Z','None (for damaged discs)']]},
+  {key:'MAX_PARALLEL', label:'Discs at once', hint:'Drives sharing a USB controller thrash above 2',
+   opts:[['1','1'],['2','2'],['3','3'],['4','4']]},
+  {key:'AUDIO_RIP_TIMEOUT', label:'Give up after', hint:'Keeps whatever was read by then',
+   opts:[['1800','30 minutes'],['5400','90 minutes'],['10800','3 hours'],['0','never']]},
+];
+
+let settingsDirty = false;
+
+async function drawSettings() {
+  if (settingsDirty) return;              // don't clobber a half-made choice
+  let d;
+  try { d = await (await fetch('/api/settings')).json(); } catch { return; }
+  const cur = d.settings || {};
+  $('#settings').innerHTML = `<div class="card">` + SETTINGS.map(s => `
+      <div class="setting">
+        <label for="set-${s.key}">${esc(s.label)}<em>${esc(s.hint)}</em></label>
+        <select id="set-${s.key}" onchange="saveSetting('${s.key}')">
+          ${s.opts.map(([v, t]) =>
+            `<option value="${esc(v)}"${String(cur[s.key]) === v ? ' selected' : ''}>${esc(t)}</option>`
+          ).join('')}
+        </select>
+      </div>`).join('') +
+    `<div class="meta">Changes apply to the next disc — a rip already running is unaffected.</div></div>`;
+}
+
+async function saveSetting(key) {
+  const el = document.getElementById('set-' + key);
+  settingsDirty = true;
+  const r = await post('/api/settings', {[key]: el.value});
+  settingsDirty = false;
+  if (r) toast('saved');
+  drawSettings();
+}
+
 let openLog = null;
 
 async function drawLogs() {
@@ -310,6 +366,7 @@ async function refresh() {
   if (!editing) drawDrives(d.drives);
   drawIsos(d.isos);
   drawLogs();
+  drawSettings();
   loadLog();
 }
 

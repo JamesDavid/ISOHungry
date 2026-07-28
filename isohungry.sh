@@ -163,6 +163,28 @@ disc_bytes() {
 
 free_bytes() { df -B1 --output=avail "$BASE_OUTPUT_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
 
+# --- runtime settings -------------------------------------------------------
+# Written by the web UI, re-read before every scan so a change applies to the
+# next disc without a restart. Environment variables provide the defaults.
+#
+# Parsed key by key with the values whitelisted, never sourced: this file is
+# writable from the web UI, and AUDIO_CDPARANOIA_OPTS is pasted onto a command
+# line. Sourcing it would turn the settings form into a shell.
+SETTINGS_FILE="$BASE_OUTPUT_DIR/settings.conf"
+
+setting_of() { sed -n "s/^$1=//p" "$SETTINGS_FILE" 2>/dev/null | tail -1; }
+
+load_settings() {
+  [ -f "$SETTINGS_FILE" ] || return 0
+  local v
+  v=$(setting_of AUDIO_FORMAT);          case "$v" in mp3|flac) AUDIO_FORMAT=$v ;; esac
+  v=$(setting_of RIP_DATA_DISCS);        case "$v" in 0|1) RIP_DATA_DISCS=$v ;; esac
+  v=$(setting_of AUDIO_CDPARANOIA_OPTS); case "$v" in ''|-Y|-Z) AUDIO_CDPARANOIA_OPTS=$v ;; esac
+  v=$(setting_of MAX_PARALLEL);          [[ "$v" =~ ^[1-9][0-9]?$ ]] && MAX_PARALLEL=$v
+  v=$(setting_of AUDIO_RIP_TIMEOUT);     [[ "$v" =~ ^[0-9]{1,6}$ ]] && AUDIO_RIP_TIMEOUT=$v
+  return 0
+}
+
 # --- disc identification ----------------------------------------------------
 # What kind of disc is this? Audio is checked first: an "enhanced CD" carries
 # both a data session and audio tracks, and the music is the interesting part.
@@ -761,6 +783,8 @@ TUI_PID=$!
 # --------------------------------------------------------------- main loop
 
 while true; do
+  load_settings          # picked up from the web UI; applies to the next disc
+
   for DEVICE in $DEVICE_GLOB; do
     [ -b "$DEVICE" ] || continue
 

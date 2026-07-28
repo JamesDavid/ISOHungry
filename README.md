@@ -164,6 +164,17 @@ shows the candidates with a `*` beside those whose track count agrees, then
 tags, renames and files the album under `Artist/Album`. There is no eject and
 no delete.
 
+It also carries a **Settings** panel for the options you actually change disc
+to disc — music format, whether to rip data discs, how hard to fight a
+scratched CD, how many discs at once, and when to give up. Changes are written
+to `out/settings.conf` and picked up before the next scan, so they apply to the
+**next disc without a restart**; a rip already running is unaffected.
+
+Those settings override the environment, so `docker-compose.yml` still sets
+the defaults. Values are whitelisted on both sides — the file is writable from
+the web UI and one of its values reaches a command line, so the ripper
+validates every key it reads rather than sourcing the file.
+
 `WEB_UI=0` disables it entirely.
 
 ### Reaching it from other machines
@@ -250,18 +261,22 @@ ssh -L 8080:127.0.0.1:8080 you@host    # then use http://localhost:8080
 Set these in `docker-compose.yml` under `environment:`, except `WEB_BIND`,
 which belongs in a `.env` file beside it because it's machine-specific.
 
+The five marked **UI** can also be changed from the web UI's Settings panel,
+which writes `out/settings.conf` and overrides the environment without a
+restart.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `BASE_OUTPUT_DIR` | `/output` | Where output is written |
 | `POLL_INTERVAL` | `5` | Seconds between drive scans |
-| `MAX_PARALLEL` | `2` | Concurrent rips — USB drives on one controller thrash above this |
+| `MAX_PARALLEL` **(UI)** | `2` | Concurrent rips — USB drives on one controller thrash above this |
 | `SPACE_FACTOR` | `22` | Free space required, in tenths of disc size (2.2×) |
 | `PROBE_TIMEOUT` | `30` | Seconds before a wedged drive is given up on |
 | `GENERIC_LABELS` | see script | Labels too common to trust as filenames |
-| `AUDIO_FORMAT` | `mp3` | `mp3` (LAME `-V0`, ~245 kbps VBR) or `flac` |
-| `AUDIO_RIP_TIMEOUT` | `5400` | Seconds before an audio rip gives up; `0` disables |
-| `AUDIO_CDPARANOIA_OPTS` | — | Extra cdparanoia flags; `-Y` or `-Z` for damaged discs |
-| `RIP_DATA_DISCS` | `1` | `0` to ignore non-video, non-audio discs |
+| `AUDIO_FORMAT` **(UI)** | `mp3` | `mp3` (LAME `-V0`, ~245 kbps VBR) or `flac` |
+| `AUDIO_RIP_TIMEOUT` **(UI)** | `5400` | Seconds before an audio rip gives up; `0` disables |
+| `AUDIO_CDPARANOIA_OPTS` **(UI)** | — | Extra cdparanoia flags; `-Y` or `-Z` for damaged discs |
+| `RIP_DATA_DISCS` **(UI)** | `1` | `0` to ignore non-video, non-audio discs |
 | `WEB_UI` / `WEB_PORT` | `1` / `8080` | Web status page |
 | `WEB_BIND` *(.env)* | `127.0.0.1` | Interface the UI listens on |
 | `DEVICE_GLOB` | `/dev/sr*` | Which devices to watch |

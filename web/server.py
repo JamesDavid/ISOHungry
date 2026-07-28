@@ -128,6 +128,75 @@ def read_pending(fp):
 
 AUDIO_EXT = (".mp3", ".flac", ".ogg", ".m4a", ".wav")
 
+SETTINGS_FILE = os.path.join(OUTPUT_DIR, "settings.conf")
+
+# Everything the UI may change, with how to validate it. The ripper applies
+# the same whitelist when reading the file, so a bad value can never reach a
+# command line even if the file is edited by hand.
+SETTINGS = {
+    "AUDIO_FORMAT":          {"type": "choice", "values": ["mp3", "flac"], "default": "mp3"},
+    "RIP_DATA_DISCS":        {"type": "choice", "values": ["1", "0"], "default": "1"},
+    "AUDIO_CDPARANOIA_OPTS": {"type": "choice", "values": ["", "-Y", "-Z"], "default": ""},
+    "MAX_PARALLEL":          {"type": "int", "min": 1, "max": 8, "default": "2"},
+    "AUDIO_RIP_TIMEOUT":     {"type": "int", "min": 0, "max": 86400, "default": "5400"},
+}
+
+
+def read_settings():
+    """Effective values: the file wins, then the environment, then the default."""
+    onfile = {}
+    try:
+        with open(SETTINGS_FILE) as fh:
+            for line in fh:
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    onfile[k.strip()] = v.strip()
+    except OSError:
+        pass
+    out = {}
+    for key, spec in SETTINGS.items():
+        val = onfile.get(key, os.environ.get(key, spec["default"]))
+        if spec["type"] == "choice" and val not in spec["values"]:
+            val = spec["default"]
+        elif spec["type"] == "int":
+            try:
+                n = int(val)
+                val = str(min(max(n, spec["min"]), spec["max"]))
+            except (TypeError, ValueError):
+                val = spec["default"]
+        out[key] = val
+    return out
+
+
+def write_settings(incoming):
+    """Validate and persist. Returns (ok, error)."""
+    current = read_settings()
+    for key, raw in incoming.items():
+        if key not in SETTINGS:
+            return False, "unknown setting: %s" % key
+        spec = SETTINGS[key]
+        val = "" if raw is None else str(raw)
+        if spec["type"] == "choice":
+            if val not in spec["values"]:
+                return False, "%s must be one of %r" % (key, spec["values"])
+        else:
+            try:
+                n = int(val)
+            except ValueError:
+                return False, "%s must be a number" % key
+            if not (spec["min"] <= n <= spec["max"]):
+                return False, "%s must be %d-%d" % (key, spec["min"], spec["max"])
+            val = str(n)
+        current[key] = val
+
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("# Written by the ISOHungry web UI. Applies to the next disc.\n")
+        for k in SETTINGS:
+            fh.write("%s=%s\n" % (k, current[k]))
+    os.replace(tmp, SETTINGS_FILE)
+    return True, None
+
 
 def collect_isos():
     """Everything ISOHungry has produced: movie/data images and music albums."""
@@ -290,6 +359,11 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if path == "/api/settings":
+            self._send(200, {"settings": read_settings(),
+                             "spec": SETTINGS})
+            return
+
         if path == "/api/logs":
             out = []
             try:
@@ -406,6 +480,14 @@ class Handler(BaseHTTPRequestHandler):
             elif os.path.exists(target):
                 os.remove(target)          # empty name clears it
             self._send(200, {"ok": True, "fp": fp, "name": name})
+            return
+
+        if path == "/api/settings":
+            ok, err = write_settings(payload or {})
+            if not ok:
+                self._send(400, {"error": err})
+            else:
+                self._send(200, {"ok": True, "settings": read_settings()})
             return
 
         if path == "/api/identify":
