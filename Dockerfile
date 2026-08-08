@@ -74,8 +74,10 @@ COPY entrypoint.sh /usr/local/bin/entrypoint
 COPY web/ /opt/isohungry/
 COPY scripts/retag-music.sh /opt/isohungry/retag-music.sh
 COPY scripts/identify-album.py /opt/isohungry/identify-album.py
+COPY scripts/drive-status.py /opt/isohungry/drive-status.py
 RUN chmod +x /usr/local/bin/isohungry /usr/local/bin/entrypoint \
-             /opt/isohungry/retag-music.sh /opt/isohungry/identify-album.py
+             /opt/isohungry/retag-music.sh /opt/isohungry/identify-album.py \
+             /opt/isohungry/drive-status.py
 
 # C.UTF-8 makes bash count characters rather than bytes, so the status line
 # no longer slices emoji in half mid-scroll.
