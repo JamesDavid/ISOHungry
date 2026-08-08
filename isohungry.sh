@@ -210,6 +210,13 @@ audio_bytes() {
   printf '%d' $(( secs * 176400 ))
 }
 
+# Tray state, asked via ioctl rather than by opening the device to read.
+# Probing a drive with an open tray makes the kernel close it, so a poll loop
+# that skips this check fights whoever is trying to load a disc.
+drive_state() {
+  python3 /opt/isohungry/drive-status.py "$1" 2>/dev/null
+}
+
 has_video_ts() {
   timeout "$PROBE_TIMEOUT" isoinfo -f -i "$1" 2>/dev/null | grep -qi '/VIDEO_TS'
 }
@@ -793,6 +800,14 @@ while true; do
 
     # A rip is already running on this drive.
     [ -e "$LOCKFILE" ] && continue
+
+    # Leave an open tray alone. Probing it would slam it shut in the hand of
+    # whoever just pressed eject.
+    if [ "$(drive_state "$DEVICE")" = open ]; then
+      rm -f "$HANDLED_DIR/$DEV_NAME"
+      set_status "$DEV_NAME" "🙌 Me wait, tray open!" ""
+      continue
+    fi
 
     # No readable disc: reset the drive's state so the next insert is noticed.
     # Audio first: an enhanced CD has both a data session and audio tracks,
