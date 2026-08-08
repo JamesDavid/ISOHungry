@@ -734,6 +734,23 @@ rip_disc() {
     echo "=== friendly name applied: $friendly" >> "$logfile"
   fi
 
+  # The catalogue knows what this disc is, where the volume label only knows
+  # what the pressing plant wrote on it. Consulted after the ISO exists,
+  # because identification is by the sizes of the files inside it, and only
+  # when nobody has typed a name of their own — a human choice outranks a
+  # lookup. Only an exact content-hash match is acted on; renaming files
+  # unattended on a fuzzy guess is not worth the convenience.
+  if [ -z "${friendly:-}" ] && [ "${DISCDB_NAMING:-1}" = 1 ]; then
+    if catalogued=$(timeout 60 python3 /opt/isohungry/discdb.py identify "$partial" 2>/dev/null) \
+       && [ -n "$catalogued" ]; then
+      catalogued=$(sanitize_label "$catalogued")
+      printf -v stamp '%(%Y-%m-%d_%H%M%S)T' -1
+      iso_path="$MOVIE_DIR/${catalogued}.iso"
+      [ -e "$iso_path" ] && iso_path="$MOVIE_DIR/${catalogued}_${stamp}.iso"
+      echo "=== named from TheDiscDb: $catalogued" >> "$logfile"
+    fi
+  fi
+
   mv -f "$partial" "$iso_path"
   printf '%s\n' "movies/${iso_path##*/}" > "$FP_DIR/$fp"
   echo "=== done $(date -Is) -> $iso_path" >> "$logfile"
